@@ -43,6 +43,10 @@ Tensor::Tensor(const Tensor& tensor, const std::shared_ptr<void>& so) : _impl{te
         _so = so;
 }
 
+bool Tensor::operator==(const Tensor& other) const {
+    return _impl == other._impl;
+}
+
 Tensor::Tensor(const std::shared_ptr<ITensor>& impl, const std::shared_ptr<void>& so) : _impl{impl}, _so{so} {
     OPENVINO_ASSERT(_impl != nullptr, "Tensor was not initialized.");
 }

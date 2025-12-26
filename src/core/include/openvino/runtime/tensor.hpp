@@ -90,6 +90,11 @@ public:
     /// @return reference to the current object
     Tensor& operator=(Tensor&& other) = default;
 
+    /// @brief Equality operator
+    /// @param other other Tensor object
+    /// @return true if tensors are equal
+    bool operator==(const Tensor& other) const;
+
     /**
      * @brief Destructor preserves unloading order of implementation object and reference to library
      */
