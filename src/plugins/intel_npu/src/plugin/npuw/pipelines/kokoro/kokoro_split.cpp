@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 // Copyright (C) 2018-2026 Intel Corporation
+=======
+// Copyright (C) 2026 Intel Corporation
+>>>>>>> cc36c60303 (Doc Update 2026 (#34052))
 // SPDX-License-Identifier: Apache-2.0
 //
 
