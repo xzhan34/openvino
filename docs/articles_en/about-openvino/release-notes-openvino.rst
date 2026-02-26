@@ -33,7 +33,6 @@ What's new
   * OpenVINO™ GenAI now adds word-level timestamp functionality to the Whisper Pipeline on CPUs, GPUs, and NPUs, enabling more accurate transcriptions and subtitling in line with OpenAI and FasterWhisper implementations.​
   * Phi-3-mini FastDraft model is now available on Hugging Face to accelerate LLM inference on NPUs. FastDraft optimizes speculative decoding for LLMs.
 
-
 * Broader LLM model support and more model compression techniques
 
   * OpenVINO™ GenAI and OpenVINO™ Model Server introduces EAGLE-3 speculative decoding to accelerate LLM inference using smarter token prediction on Intel CPUs and GPUs. Validated on Qwen3-8B​ model ​
@@ -42,9 +41,9 @@ What's new
 
 * More portability and performance to run AI at the edge, in the cloud or locally
 
-  * Preview: OpenVINO™ GenAI adds a VLM pipeline support to enhance Agentic AI framework integration.
-  * OpenVINO GenAI now supports speculative decoding for NPUs, delivering improved performance and efficient text generation through a small draft model that is periodically validated by the full-size model.
-  * Preview: NPU compiler integration with the NPU plugin enables ahead-of-time and on-device compilation without relying on OEM driver updates. Developers can enable this feature for a single, ready-to-ship package that reduces integration friction and accelerates time-to-value.
+  * OpenVINO™ GenAI adds VLM pipeline support to enhance Agentic AI framework integration.​
+  * OpenVINO GenAI now supports speculative decoding for NPUs, delivering improved performance and efficient text generation through a small draft model that is periodically validated by the full-size model.​
+  * Preview: NPU compiler integration with the NPU plugin enables ahead-of-time and on-device compilation without relying on OEM driver updates. Developers can enable this feature for a single, ready-to-ship package that reduces integration friction and accelerates time-to-value.​
   * OpenVINO™ Model Server adds enhanced support for audio endpoint plus agentic continuous batching and concurrent runs for improved LLM performance in agentic workflows on Intel CPUs and GPUs.
 
 OpenVINO™ Runtime
@@ -193,6 +192,7 @@ Jupyter Notebooks
 New models and use cases:
 
 * `LFM2  <https://github.com/openvinotoolkit/openvino_notebooks/blob/latest/notebooks/llm-chatbot/llm-chatbot.ipynb>`__
+* `Qwen3-30B-A3B <https://openvinotoolkit.github.io/openvino_notebooks/?search=chatbot>`__
 * `Visual-language assistant with Qwen3-VL and OpenVINO <https://openvinotoolkit.github.io/openvino_notebooks/?search=Visual-language+assistant+with+Qwen3-VL>`__
 * `Text-to-image generation with Qwen-Image and OpenVINO <https://openvinotoolkit.github.io/openvino_notebooks/?search=qwen-image>`__ (experimental)
 * `Multi-speaker dialogue generation with FireRedTTS-2 and OpenVINO <https://openvinotoolkit.github.io/openvino_notebooks/?search=Fireredtts>`__ (experimental)
