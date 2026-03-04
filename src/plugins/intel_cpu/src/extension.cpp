@@ -44,8 +44,12 @@
 #include "openvino/op/normalize_l2.hpp"
 #include "openvino/op/not_equal.hpp"
 #include "openvino/op/paged_attention.hpp"
+<<<<<<< HEAD
 #include "openvino/op/paged_causal_conv1d.hpp"
 #include "openvino/op/paged_gated_delta_net.hpp"
+=======
+#include "openvino/op/linear_attn.hpp"
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
 #include "openvino/op/prelu.hpp"
 #include "openvino/op/prior_box.hpp"
 #include "openvino/op/prior_box_clustered.hpp"

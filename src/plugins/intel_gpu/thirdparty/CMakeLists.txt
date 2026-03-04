@@ -162,7 +162,12 @@ if(ENABLE_ONEDNN_FOR_GPU)
                 # The arguments below requires list to be passed as argument
                 # which doesn't work properly when passed to CMAKE_ARGS.
                 # Thus we pass it via CMAKE_CACHE_ARGS
+<<<<<<< HEAD
                 ${onednn_gpu_cache_args}
+=======
+                "-DDNNL_ENABLE_PRIMITIVE:STRING=ALL"
+                "-DDNNL_ENABLE_PRIMITIVE_GPU_ISA:STRING=${ONEDNN_ENABLED_ISA}"
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
             # Build Step Options:
             BUILD_BYPRODUCTS ${ONEDNN_GPU_LIB_PATH}
             # Target Options:

@@ -11,7 +11,6 @@
 
 #include "ov_ops/moe_compressed.hpp"
 #include "intel_gpu/plugin/program_builder.hpp"
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
 #include "intel_gpu/plugin/common_utils.hpp"
 #include "intel_gpu/primitives/moe_3gemm_fused_compressed.hpp"
 #include "intel_gpu/primitives/moe_gemm.hpp"
@@ -29,7 +28,7 @@ using MOE3GemmFusedCompressed = ov::intel_gpu::op::MOE3GemmFusedCompressed;
 namespace ov::intel_gpu {
 using namespace cldnn;
 
-static void CreateMOE3GemmFusedCompressedOp(ProgramBuilder& p, const std::shared_ptr<ov::intel_gpu::op::MOE3GemmFusedCompressed>& op) {
+static void CreateMOE3GemmFusedCompressedOp(ProgramBuilder& p, const std::shared_ptr<ov::op::internal::MOE3GemmFusedCompressed>& op) {
     auto inputs = p.GetInputInfo(op);
     const auto& config = op->get_config();
     ///   0: hidden_states - input tensor with hidden representations

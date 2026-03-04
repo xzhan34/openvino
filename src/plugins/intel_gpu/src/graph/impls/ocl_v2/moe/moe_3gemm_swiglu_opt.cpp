@@ -1400,13 +1400,16 @@ public:
             scratch.gate = intermediates_memories[MOE_INTERNAL_BUFFER_GATE_OUTPUT];
             const auto& config = instance.get_typed_desc<moe_3gemm_fused_compressed>()->_config;
             int expert_num = static_cast<int>(config.num_expert);
+            int max_topk = static_cast<int>(config.top_k);
+            // Each expert may receive up to token_num*max_topk entries in worst case
+            size_t entries_per_expert = token_num * max_topk;
             scratch.expert_masks.resize(expert_num);
             for (int i = 0; i < expert_num; i++) {
-                auto mask_layout = cldnn::layout({static_cast<int>(token_num)}, cldnn::data_types::i32, cldnn::format::get_default_format(1));
+                auto mask_layout = cldnn::layout({static_cast<int>(entries_per_expert)}, cldnn::data_types::i32, cldnn::format::get_default_format(1));
                 scratch.expert_masks[i].batch =
-                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_BATCH], mask_layout, i * token_num * sizeof(int32_t));
+                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_BATCH], mask_layout, i * entries_per_expert * sizeof(int32_t));
                 scratch.expert_masks[i].topk =
-                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_TOPK], mask_layout, i * token_num * sizeof(int32_t));
+                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_TOPK], mask_layout, i * entries_per_expert * sizeof(int32_t));
             }
         }
 

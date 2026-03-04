@@ -262,11 +262,17 @@ static const TypeToNameMap& get_type_to_name_tbl() {
         {"RMS", Type::RMS},
         {"SearchSorted", Type::SearchSorted},
         {"LoraSubgraph", Type::LoRA},
+<<<<<<< HEAD
         {"GatherMatmul", Type::GatherMatmul},
         {"GatherMatmulCompressed", Type::GatherMatmul},
         {"GatedDeltaNet", Type::GatedDeltaNet},
         {"PagedGatedDeltaNet", Type::PagedGatedDeltaNet},
         {"PagedCausalConv1D", Type::PagedCausalConv1D}};
+=======
+        {"BatchGatherMatmul", Type::GatherMatmul},
+        {"BatchGatherMatmulCompressed", Type::GatherMatmul},
+        {"LinearAttention", Type::LinearAttention}};
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
     return type_to_name_tbl;
 }
 

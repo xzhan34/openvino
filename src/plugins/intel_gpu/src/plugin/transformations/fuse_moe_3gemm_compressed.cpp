@@ -6,7 +6,12 @@
 
 #include <memory>
 
+<<<<<<< HEAD
 #include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
+=======
+#include "openvino/op/moe_compressed.hpp"
+#include "openvino/op/moe_3gemm_fused_compressed.hpp"
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
 #include "openvino/core/graph_util.hpp"
 #include "openvino/core/node.hpp"
 #include "openvino/core/rt_info.hpp"
@@ -68,12 +73,28 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
     auto sm_transpose = wrap_type<ov::op::v1::Transpose>({sm_slice, ANY}, consumers_count(1));
     auto sm_unsqueeze = wrap_type<ov::op::v0::Unsqueeze>({sm_transpose, ANY}, consumers_count(1));
 
+<<<<<<< HEAD
     // ── Sigmoid+bias routing branch ─────────────────────────────────────
     auto sig_sigmoid = wrap_type<ov::op::v0::Sigmoid>({routing_matmul});
     auto sig_routing_bias = ANY;
     auto sig_add = wrap_type<ov::op::v1::Add>({sig_sigmoid, sig_routing_bias}, consumers_count(1));
     auto sig_topk = wrap_type<ov::op::v11::TopK>({sig_add, ANY});
     sig_topk->set_output_size(2);
+=======
+    // moe compressed
+    auto moe_compressed_m = wrap_type<ov::op::internal::MOECompressed>({hidden_state_m->output(0),
+                                                                         unsqueeze_moe_m->output(0),
+                                                                         topk_m->output(1),
+                                                                         gate_wei_m->output(0),
+                                                                         gate_scale_m->output(0),
+                                                                         gate_zp_m->output(0),
+                                                                         up_wei_m->output(0),
+                                                                         up_scale_m->output(0),
+                                                                         up_zp_m->output(0),
+                                                                         down_wei_m->output(0),
+                                                                         down_scale_m->output(0),
+                                                                         down_zp_m->output(0)});
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
 
     auto sig_convert_topk = optional<ov::op::v0::Convert>({sig_topk->output(1)});
     auto sig_gather_el = wrap_type<ov::op::v6::GatherElements>({sig_sigmoid, sig_convert_topk});
@@ -159,6 +180,7 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
             return false;
         }
 
+<<<<<<< HEAD
         auto config = moe_compressed->get_config();
         bool has_shared_expert = pattern_map.count(shared_gate_wei_m) > 0;
         if (!has_shared_expert) {
@@ -260,6 +282,12 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
 
         moe_router_fused->set_friendly_name(moe_compressed->get_friendly_name());
         ov::replace_node(moe_compressed, moe_router_fused);
+=======
+        auto moe_3gemm_fused_compressed = std::make_shared<ov::op::internal::MOE3GemmFusedCompressed>(args, moe_compressed->get_config());
+        moe_3gemm_fused_compressed->set_friendly_name(moe_compressed->get_friendly_name());
+        ov::copy_runtime_info(moe_compressed, moe_3gemm_fused_compressed);
+        ov::replace_node(moe_compressed, moe_3gemm_fused_compressed);
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
 
         return true;
     };

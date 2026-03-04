@@ -10,7 +10,11 @@
 #include <intel_gpu/primitives/data.hpp>
 #include <intel_gpu/primitives/reorder.hpp>
 #include <intel_gpu/primitives/moe_scatter_reduction.hpp>
+<<<<<<< HEAD
 #include "ov_ops/moe_compressed.hpp"
+=======
+#include <openvino/op/moe_compressed.hpp>
+>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e))
 
 using namespace cldnn;
 using namespace ov::intel_gpu;

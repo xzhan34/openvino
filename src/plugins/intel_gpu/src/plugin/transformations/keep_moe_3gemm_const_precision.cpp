@@ -6,8 +6,8 @@
 
 #include <memory>
 
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
-#include "openvino/pass/pattern/op/or.hpp"
+#include "openvino/op/moe_compressed.hpp"
+#include "openvino/op/moe_3gemm_fused_compressed.hpp"
 #include "openvino/pass/pattern/op/pattern.hpp"
 #include "openvino/pass/pattern/op/wrap_type.hpp"
 #include "transformations/rt_info/keep_const_precision.hpp"
