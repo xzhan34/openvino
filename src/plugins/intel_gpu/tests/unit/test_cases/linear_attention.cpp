@@ -130,8 +130,9 @@ struct linear_attention_gpu_test : public ::testing::TestWithParam<linear_attent
                         b_g = exp(b_g);
                         // TODO SCALE
                         for (int j = 0; j < this->K; j++) {
-                            b_k[j] = k_ptr[i * this->K * this->H + j];
-                            b_q[j] = q_ptr[i * this->K * this->H + j];
+                            // Q/K are laid out as [B, T, HK, K], so per-token stride is HK*K.
+                            b_k[j] = k_ptr[i * this->K * this->HK + j];
+                            b_q[j] = q_ptr[i * this->K * this->HK + j];
                         }
                         
                         l2norm(b_k, this->K);
