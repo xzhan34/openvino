@@ -35,21 +35,22 @@ struct linear_attention : public primitive_base<linear_attention> {
     /// @param id                 An identifier of new primitive.
     /// @param inputs             A list of Input primitive ids (inputs).
     /// @param variable_info      Variable info for recurrent state.
+    /// @param snapshot_all_states Whether to output per-token intermediate states.
     linear_attention(const primitive_id& id,
             const std::vector<input_info>& inputs,
-            const ov::op::util::VariableInfo& variable_info)
+            const ov::op::util::VariableInfo& variable_info,
+            bool snapshot_all_states = false)
         : primitive_base(id, inputs),
-          variable_info(variable_info) {
+          variable_info(variable_info),
+          snapshot_all_states(snapshot_all_states) {
     }
 
     ov::op::util::VariableInfo variable_info;
+    bool snapshot_all_states = false;
 
     size_t hash() const override {
         size_t seed = primitive::hash();
-        // Note: variable_info is intentionally excluded from hash.
-        // It does not affect kernel source code — only runtime argument binding.
-        // Including it would give each layer a unique hash, preventing kernel reuse
-        // and causing OpenCL "redefinition" errors when multiple kernels are batched.
+        seed = hash_combine(seed, snapshot_all_states);
         return seed;
     }
 
@@ -63,6 +64,7 @@ struct linear_attention : public primitive_base<linear_attention> {
         ob << variable_info.variable_id;
         ob << variable_info.data_shape;
         ob << make_data(&data_type, sizeof(ov::element::Type_t));
+        ob << snapshot_all_states;
     }
 
     void load(BinaryInputBuffer& ib) override {
@@ -74,6 +76,7 @@ struct linear_attention : public primitive_base<linear_attention> {
         ib >> data_shape;
         ib >> make_data(&data_type, sizeof(ov::element::Type_t));
         variable_info = {data_shape, data_type, variable_id};
+        ib >> snapshot_all_states;
     }
 };
 
