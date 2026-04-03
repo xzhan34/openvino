@@ -63,6 +63,10 @@ public:
     void enqueue();
     void wait();
 
+    void restore_variable_from_output(const std::string& variable_name,
+                                      const std::string& output_name,
+                                      size_t token_position) override;
+
     bool use_external_queue() const { return m_use_external_queue; }
 
 private:
