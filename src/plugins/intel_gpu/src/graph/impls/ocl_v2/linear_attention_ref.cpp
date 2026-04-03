@@ -53,6 +53,8 @@ protected:
         jit.make("IO_TYPE", io_type);
         jit.make("SCALE_FACTOR", scale_factor);
         jit.make("OUTPUT_STATE", output_state);
+        const auto snapshot_all = params.output_layouts.size() > 2 ? 1 : 0;
+        jit.make("SNAPSHOT_ALL_STATES", snapshot_all);
 
         return jit;
     }
