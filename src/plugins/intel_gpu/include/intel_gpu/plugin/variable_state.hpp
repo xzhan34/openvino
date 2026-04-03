@@ -74,6 +74,12 @@ public:
 
     ov::element::Type get_user_specified_type() const;
 
+    /// Copy a token-position slice from a 5D all-states GPU memory [B,T,H,K,V]
+    /// to this variable's GPU memory [B,H,K,V].  Pure GPU-to-GPU, no CPU round-trip.
+    void set_state_from_memory_slice(const cldnn::memory::ptr& src_5d_mem,
+                                     size_t token_position,
+                                     const ov::Shape& all_states_shape);
+
 protected:
     cldnn::layout m_layout;
     ov::element::Type m_user_specified_type;

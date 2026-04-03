@@ -154,6 +154,10 @@ public:
      */
     const std::vector<ov::Output<const ov::Node>>& get_outputs() const override;
 
+    void restore_variable_from_output(const std::string& variable_name,
+                                      const std::string& output_name,
+                                      size_t token_position) override;
+
 protected:
     using Stage = std::pair<std::shared_ptr<ov::threading::ITaskExecutor>, ov::threading::Task>;
     /**

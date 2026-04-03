@@ -10,6 +10,7 @@
 #include "intel_gpu/primitives/kv_cache.hpp"
 #include "intel_gpu/primitives/read_value.hpp"
 #include "intel_gpu/plugin/common_utils.hpp"
+#include "primitive_inst.h"
 #include "intel_gpu/plugin/usm_host_tensor.hpp"
 #include "intel_gpu/plugin/sync_infer_request.hpp"
 #include "intel_gpu/plugin/remote_context.hpp"
@@ -978,6 +979,56 @@ void SyncInferRequest::init_mappings() {
 
 bool SyncInferRequest::is_batched_input(const ov::Output<const ov::Node>& port) const {
     return m_batched_tensors.count(port.get_tensor_ptr()) > 0;
+}
+
+void SyncInferRequest::restore_variable_from_output(const std::string& variable_name,
+                                                    const std::string& output_name,
+                                                    size_t token_position) {
+    // Find the variable
+    auto var_it = m_variables.find(variable_name);
+    OPENVINO_ASSERT(var_it != m_variables.end(), "[GPU] Variable not found: ", variable_name);
+    auto gpu_var = std::dynamic_pointer_cast<VariableState>(var_it->second);
+    OPENVINO_ASSERT(gpu_var, "[GPU] Variable is not a VariableState: ", variable_name);
+
+    // Find the output by matching the user-visible tensor name to port names,
+    // then look up the internal primitive name and retrieve the GPU memory.
+    cldnn::memory::ptr output_mem;
+    ov::Shape output_shape;
+
+    for (const auto& [port_idx, port] : m_output_ports_map) {
+        for (const auto& name : port.get_names()) {
+            if (name == output_name) {
+                auto internal_name = m_output_names_map.at(port_idx);
+                output_mem = m_internal_outputs.at(internal_name).get_memory(false);
+                // Use the actual data layout, not the (potentially inflated) memory layout
+                output_shape = m_internal_outputs.at(internal_name).get_layout().get_shape();
+
+                // The GPU plugin may insert an f16→f32 reorder at the output boundary.
+                // When the output type differs from the variable type, try to use the
+                // pre-reorder dependency memory which stays in device precision (e.g. f16),
+                // enabling a direct GPU-to-GPU copy without CPU round-trip type conversion.
+                auto src_dt = output_mem->get_layout().data_type;
+                auto dst_dt = gpu_var->get_layout().data_type;
+                if (src_dt != dst_dt) {
+                    auto network = m_graph->get_network();
+                    auto prim_inst = network->get_primitive(internal_name);
+                    if (!prim_inst->dependencies().empty()) {
+                        auto dep_mem = prim_inst->dep_memory_ptr(0);
+                        if (dep_mem && dep_mem->get_layout().data_type == dst_dt) {
+                            output_mem = dep_mem;
+                            // Shape is preserved across a reorder (only format/type changes)
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        if (output_mem) break;
+    }
+    OPENVINO_ASSERT(output_mem, "[GPU] Output not found: ", output_name);
+
+    // Direct GPU-to-GPU slice copy — no CPU round-trip
+    gpu_var->set_state_from_memory_slice(output_mem, token_position, output_shape);
 }
 
 }  // namespace ov::intel_gpu
