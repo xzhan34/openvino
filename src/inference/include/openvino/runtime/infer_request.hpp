@@ -316,6 +316,20 @@ public:
     std::vector<VariableState> query_state();
 
     /**
+     * @brief GPU-accelerated restore of a variable state from an internal output tensor slice.
+     *
+     * After batch inference that produces per-token state snapshots (5D output [B,T,H,K,V]),
+     * this method copies the state at @p token_position directly on GPU without CPU round-trip.
+     *
+     * @param variable_name Name of the variable state (e.g. "linear_states.0.recurrent").
+     * @param output_name   Name of the 5D snapshot output (e.g. "all_linear_states.layer0").
+     * @param token_position Which token position in dimension 1 to select.
+     */
+    void restore_variable_from_output(const std::string& variable_name,
+                                      const std::string& output_name,
+                                      size_t token_position);
+
+    /**
      * @brief Resets all internal variable states for relevant infer request to a value specified as
      * default for the corresponding `ReadValue` node
      */
