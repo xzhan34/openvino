@@ -272,6 +272,9 @@ KERNEL(linear_attention_ref)
 #if OUTPUT_STATE
  __global OUTPUT1_TYPE* output_state,
 #endif
+#if SNAPSHOT_ALL_STATES
+ __global OUTPUT2_TYPE* all_states,
+#endif
  int seq_len,
  int key_offset,
  int value_offset) {
@@ -533,6 +536,37 @@ KERNEL(linear_attention_ref)
             }
 #endif
         }
+#if SNAPSHOT_ALL_STATES
+        // Save per-token intermediate recurrent state for MTP speculative decoding.
+        // all_states layout: [B, T, H_v, K_HEAD_DIMS, V_HEAD_DIMS]
+        // Each work group handles one (b, h, v_block_id) — write V_BLOCK_SIZE v-slices.
+        {
+            __global INPUT5_TYPE* snap_buf = (__global INPUT5_TYPE*)all_states;
+            int snap_token_stride = V_HEAD_NUMS * K_HEAD_DIMS * K_HEAD_DIMS;
+            for (int iv = 0; iv < V_BLOCK_SIZE; iv++) {
+                int i_v = i_v_base + iv;
+                int snap_base = b * seq_len * snap_token_stride
+                              + i * snap_token_stride
+                              + h * K_HEAD_DIMS * K_HEAD_DIMS
+                              + i_v * K_HEAD_DIMS;
+#if (K_HEAD_DIMS == 128)
+#    if (SUBGROUP_SIZE == 8)
+                store_init_state_128_sg8(init_state[iv], snap_buf, snap_base);
+#    else
+                store_init_state_128(&init_state[iv], snap_buf, snap_base);
+#    endif
+#elif (K_HEAD_DIMS % 32) == 0
+#    if (SUBGROUP_SIZE == 16)
+                store_init_state_32_sg16(init_state[iv], snap_buf, snap_base, id_sg_local);
+#    else
+                store_init_state_32(init_state[iv], snap_buf, snap_base, id_sg_local);
+#    endif
+#else
+                store_init_state_generic(init_state[iv], snap_buf, snap_base, id_sg_local);
+#endif
+            }
+        }
+#endif
     }
         // store final state
         __global INPUT5_TYPE* state_out = initial_state;

@@ -20,6 +20,9 @@ public:
 
     LinearAttention(const ov::OutputVector& args);
     LinearAttention(const ov::OutputVector& args, const std::shared_ptr<ov::op::util::Variable>& variable);
+    LinearAttention(const ov::OutputVector& args,
+                    const std::shared_ptr<ov::op::util::Variable>& variable,
+                    bool snapshot_all_states);
 
     bool visit_attributes(ov::AttributeVisitor& visitor) override;
 
@@ -33,8 +36,11 @@ public:
 
     void set_out_type(int index, const ov::element::Type& output_type);
 
+    bool get_snapshot_all_states() const { return m_snapshot_all_states; }
+
 protected:
     std::vector<ov::element::Type> m_output_type = {ov::element::dynamic, ov::element::dynamic, ov::element::dynamic};
+    bool m_snapshot_all_states = false;
 };
 
 }  // namespace op

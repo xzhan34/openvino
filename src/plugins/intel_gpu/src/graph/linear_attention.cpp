@@ -34,8 +34,23 @@ std::vector<layout> linear_attention_inst::calc_output_layouts(linear_attention_
     }
     std::vector<layout> output_layouts;
     output_layouts.emplace_back(out_ps, value_layout.data_type, value_layout.format);
-    if (num_outputs == 2) {
+    if (num_outputs >= 2) {
         output_layouts.push_back(impl_param.get_input_layout(5));
+    }
+    if (num_outputs >= 3 && desc->snapshot_all_states) {
+        // Output 2: per-token intermediate states [B, T, H_v, K_dim, V_dim]
+        auto state_layout = impl_param.get_input_layout(5);  // [B, H_v, K, V]
+        auto state_ps = state_layout.get_partial_shape();
+        if (state_ps.rank().is_static() && q_ps.rank().is_static()) {
+            ov::PartialShape snap_ps;
+            snap_ps.push_back(q_ps[0]);   // B
+            snap_ps.push_back(q_ps[1]);   // T
+            for (size_t i = 1; i < state_ps.size(); i++) {
+                snap_ps.push_back(state_ps[i]);  // H_v, K, V
+            }
+            // Use bfzyx (5D format) since snap_ps is 5-dimensional
+            output_layouts.emplace_back(snap_ps, state_layout.data_type, cldnn::format::bfzyx);
+        }
     }
     return output_layouts;
 }
