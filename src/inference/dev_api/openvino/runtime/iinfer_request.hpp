@@ -133,6 +133,18 @@ public:
         OPENVINO_THROW("restore_variable_from_output is not supported by this plugin");
     }
 
+    /**
+     * @brief Trim a variable state's dimension in-place (zero-copy on GPU).
+     * @param variable_name Name of the variable state.
+     * @param trim_amount   Number of entries to remove from the end of the axis.
+     * @param axis           The dimension to trim.
+     */
+    virtual void trim_variable_state(const std::string& variable_name,
+                                     size_t trim_amount,
+                                     size_t axis) {
+        OPENVINO_THROW("trim_variable_state is not supported by this plugin");
+    }
+
 protected:
     /**
      * @brief Check that all tensors are valid. Throws an exception if it's not.

@@ -137,24 +137,28 @@ ov::element::Type VariableState::get_user_specified_type() const {
 void VariableState::set_state_from_memory_slice(const cldnn::memory::ptr& src_5d_mem,
                                                 size_t token_position,
                                                 const ov::Shape& all_states_shape) {
-    // all_states_shape: [B, T, H, K, V]
-    OPENVINO_ASSERT(all_states_shape.size() == 5, "Expected 5D shape for all_states, got ", all_states_shape.size());
+    // Supports both 5D (linear states: [B, T, H, K, V]) and 4D (conv states: [B, T, D, KS])
+    OPENVINO_ASSERT(all_states_shape.size() == 5 || all_states_shape.size() == 4,
+                    "Expected 4D or 5D shape for all_states, got ", all_states_shape.size());
 
     const size_t B = all_states_shape[0];
     const size_t T = all_states_shape[1];
-    const size_t H = all_states_shape[2];
-    const size_t K_dim = all_states_shape[3];
-    const size_t V_dim = all_states_shape[4];
+
+    // Compute per-token state elements and target shape from remaining dims
+    size_t state_elems = 1;
+    ov::Shape state_shape = {B};
+    for (size_t i = 2; i < all_states_shape.size(); ++i) {
+        state_elems *= all_states_shape[i];
+        state_shape.push_back(all_states_shape[i]);
+    }
 
     OPENVINO_ASSERT(token_position < T, "token_position ", token_position, " >= T ", T);
 
     auto src_et = src_5d_mem->get_layout().data_type;
     size_t src_elem_bytes = ov::element::Type(src_et).size();
-    size_t state_elems = H * K_dim * V_dim;
     size_t dst_elem_bytes = ov::element::Type(m_layout.data_type).size();
 
-    // Ensure variable's device buffer is allocated for [B, H, K, V]
-    ov::Shape state_shape = {B, H, K_dim, V_dim};
+    // Ensure variable's device buffer is allocated for state_shape
     m_layout.set_partial_shape(state_shape);
     update_device_buffer();
 
@@ -216,6 +220,20 @@ void VariableState::set_state_from_memory_slice(const cldnn::memory::ptr& src_5d
         m_memory->copy_from(stream, dst_host.data(), true);
     }
 
+    set();
+}
+
+void VariableState::trim_state(size_t trim_amount, size_t axis) {
+    auto shape = m_layout.get_shape();
+    OPENVINO_ASSERT(axis < shape.size(),
+                    "[GPU] trim_state: axis ", axis, " >= rank ", shape.size());
+    OPENVINO_ASSERT(shape[axis] >= trim_amount,
+                    "[GPU] trim_state: trim_amount ", trim_amount,
+                    " > dim[", axis, "] = ", shape[axis]);
+
+    shape[axis] -= trim_amount;
+    m_layout.set_partial_shape(shape);
+    update_device_buffer();   // reinterpret_buffer only (no alloc/copy)
     set();
 }
 

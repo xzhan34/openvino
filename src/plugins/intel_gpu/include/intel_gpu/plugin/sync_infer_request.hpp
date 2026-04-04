@@ -67,6 +67,10 @@ public:
                                       const std::string& output_name,
                                       size_t token_position) override;
 
+    void trim_variable_state(const std::string& variable_name,
+                             size_t trim_amount,
+                             size_t axis) override;
+
     bool use_external_queue() const { return m_use_external_queue; }
 
 private:
