@@ -567,6 +567,42 @@ KERNEL(linear_attention_ref)
             }
         }
 #endif
+        // F16 rounding at token boundary: match sequential single-token precision.
+        // In sequential mode, state is stored as f16 after each token and loaded back
+        // as f16→f32 for the next token. In batch mode (seq_len>1), state stays in f32
+        // registers across tokens. This f32→f16→f32 round-trip ensures batch results
+        // are numerically identical to sequential, preventing logit divergence that
+        // causes degeneration in structured outputs (e.g., VL <think> mode).
+        // Skip the last token since it's followed by the final state store anyway.
+        if (i < seq_len - 1) {
+            for (int iv = 0; iv < V_BLOCK_SIZE; iv++) {
+#if (K_HEAD_DIMS == 128)
+#    if (SUBGROUP_SIZE == 8)
+                init_state[iv][0] = convert_float8(TO_INPUT5_TYPE8(init_state[iv][0]));
+                init_state[iv][1] = convert_float8(TO_INPUT5_TYPE8(init_state[iv][1]));
+#    else
+                init_state[iv] = convert_float8(TO_INPUT5_TYPE8(init_state[iv]));
+#    endif
+#elif (K_HEAD_DIMS % 32) == 0
+#    if (SUBGROUP_SIZE == 16)
+                for (int j = id_sg_local; j < K_HEAD_DIMS; j += 32) {
+                    int idx = j >> 5;
+                    init_state[iv][idx] = convert_float2(TO_INPUT5_TYPE2(init_state[iv][idx]));
+                }
+#    else
+                for (int j = id_sg_local; j < K_HEAD_DIMS; j += SUBGROUP_SIZE) {
+                    int idx = j / SUBGROUP_SIZE;
+                    init_state[iv][idx] = convert_float(TO_INPUT5_TYPE(init_state[iv][idx]));
+                }
+#    endif
+#else
+                for (int j = id_sg_local; j < K_HEAD_DIMS; j += SUBGROUP_SIZE) {
+                    int idx = j / SUBGROUP_SIZE;
+                    init_state[iv][idx] = convert_float(TO_INPUT5_TYPE(init_state[iv][idx]));
+                }
+#endif
+            }
+        }
     }
         // store final state
         __global INPUT5_TYPE* state_out = initial_state;
