@@ -30,8 +30,19 @@ std::vector<layout> fused_conv_inst::calc_output_layouts(fused_conv_node const& 
 
     std::vector<layout> output_layouts;
     output_layouts.emplace_back(input_layout.get_partial_shape(), input_layout.data_type, input_layout.format);
-    if (num_outputs == 2) {
+    if (num_outputs >= 2) {
         output_layouts.push_back(state_layout);
+    }
+    // output[2] (snapshot_mode): [B, S, conv_dim, kernel_size]
+    if (num_outputs >= 3 && desc->snapshot_mode) {
+        auto input_ps = input_layout.get_partial_shape();
+        auto state_ps = state_layout.get_partial_shape();
+        auto B = input_ps[0];
+        auto S = input_ps[2];
+        auto conv_dim = state_ps[1];
+        auto kernel_size = state_ps[2];
+        ov::PartialShape snap_shape{B, S, conv_dim, kernel_size};
+        output_layouts.emplace_back(snap_shape, state_layout.data_type, state_layout.format);
     }
     return output_layouts;
 }

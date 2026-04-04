@@ -12,6 +12,7 @@
 // Outputs:
 //   OUTPUT  (output):     [B, CONV_DIM, S]
 //   OUTPUT1 (state_out):  [B, CONV_DIM, KERNEL_SIZE]
+//   OUTPUT2 (all_states): [B, S, CONV_DIM, KERNEL_SIZE] (SNAPSHOT_MODE only)
 //
 // Dispatch: global = {batch, conv_dim, 1}, local = {1, WG_SIZE, 1}
 
@@ -22,6 +23,9 @@ KERNEL(fused_conv_ref)(
     __global INPUT3_TYPE* state_in,
     __global OUTPUT_TYPE* output,
     __global OUTPUT1_TYPE* state_out,
+#ifdef SNAPSHOT_MODE
+    __global OUTPUT2_TYPE* all_states,
+#endif
     int seq_len)
 {
     const int b  = get_global_id(0);
@@ -65,6 +69,25 @@ KERNEL(fused_conv_ref)(
         for (int k = 0; k < KERNEL_SIZE - 1; k++)
             state[k] = state[k + 1];
         state[KERNEL_SIZE - 1] = x_new;
+
+        // F16 rounding at token boundary: match sequential single-token precision.
+        // In sequential mode (seq_len=1), state is stored as f16 after each token and
+        // reloaded as f16→f32 for the next call. In batch mode (seq_len>1), state stays
+        // in f32 registers across tokens. This f32→f16→f32 round-trip ensures batch
+        // results are numerically identical to sequential processing.
+        // Skip the last token since it's followed by the final state store anyway.
+        if (s < seq_len - 1) {
+            for (int k = 0; k < KERNEL_SIZE; k++)
+                state[k] = convert_float(TO_OUTPUT1_TYPE(state[k]));
+        }
+
+#ifdef SNAPSHOT_MODE
+        // Save per-token conv state snapshot: all_states[b, s, ch, 0..KERNEL_SIZE-1]
+        // Layout: [B, S, CONV_DIM, KERNEL_SIZE] — contiguous in KERNEL_SIZE
+        const int snap_base = ((b * seq_len + s) * CONV_DIM + ch) * KERNEL_SIZE;
+        for (int k = 0; k < KERNEL_SIZE; k++)
+            all_states[snap_base + k] = TO_OUTPUT2_TYPE(state[k]);
+#endif
     }
 
     // 5. Write back updated state
