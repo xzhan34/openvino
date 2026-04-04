@@ -114,6 +114,12 @@ void ov::IAsyncInferRequest::restore_variable_from_output(const std::string& var
     m_sync_request->restore_variable_from_output(variable_name, output_name, token_position);
 }
 
+void ov::IAsyncInferRequest::trim_variable_state(const std::string& variable_name,
+                                                 size_t trim_amount,
+                                                 size_t axis) {
+    m_sync_request->trim_variable_state(variable_name, trim_amount, axis);
+}
+
 void ov::IAsyncInferRequest::infer_thread_unsafe() {
     run_first_stage(m_sync_pipeline.begin(), m_sync_pipeline.end(), m_sync_callback_executor);
 }

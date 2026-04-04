@@ -80,6 +80,11 @@ public:
                                      size_t token_position,
                                      const ov::Shape& all_states_shape);
 
+    /// Trim the state's dimension in-place (zero-copy).  Reduces the logical
+    /// size along @p axis by @p trim_amount.  The GPU buffer is reinterpreted
+    /// with a smaller shape; no data is moved.
+    void trim_state(size_t trim_amount, size_t axis);
+
 protected:
     cldnn::layout m_layout;
     ov::element::Type m_user_specified_type;

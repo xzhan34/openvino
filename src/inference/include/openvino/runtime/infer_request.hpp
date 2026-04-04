@@ -330,6 +330,21 @@ public:
                                       size_t token_position);
 
     /**
+     * @brief Trim a variable state's sequence dimension in-place on GPU (zero-copy).
+     *
+     * Reduces the logical size of a KV cache variable state along the given axis
+     * without any data movement. The underlying GPU buffer is reinterpreted with
+     * a smaller shape; data beyond the new boundary becomes unused padding.
+     *
+     * @param variable_name Name of the variable state (e.g. "past_key_values.0.key").
+     * @param trim_amount   Number of entries to remove from the end of the axis.
+     * @param axis           Axis along which to trim (default: 2 = sequence dim for KV cache).
+     */
+    void trim_variable_state(const std::string& variable_name,
+                             size_t trim_amount,
+                             size_t axis = 2);
+
+    /**
      * @brief Resets all internal variable states for relevant infer request to a value specified as
      * default for the corresponding `ReadValue` node
      */

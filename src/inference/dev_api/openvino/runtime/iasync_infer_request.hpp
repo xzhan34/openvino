@@ -158,6 +158,10 @@ public:
                                       const std::string& output_name,
                                       size_t token_position) override;
 
+    void trim_variable_state(const std::string& variable_name,
+                             size_t trim_amount,
+                             size_t axis) override;
+
 protected:
     using Stage = std::pair<std::shared_ptr<ov::threading::ITaskExecutor>, ov::threading::Task>;
     /**
