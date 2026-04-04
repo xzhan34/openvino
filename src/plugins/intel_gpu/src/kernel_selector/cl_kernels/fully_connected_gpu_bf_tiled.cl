@@ -1450,6 +1450,31 @@ KERNEL(fc)(
 #endif
 #if IS_DYNAMIC && COMPRESSED_WEIGHTS_INT4
     const int batch_size = BATCH_SIZE;
+#ifdef FC_FORCE_SINGLE_TILE_B
+    // Force single-tile-b processing for small batches to ensure numerical
+    // consistency with batch=1 (speculative decoding / MTP).
+    // Dispatch grid must be adjusted to provide one workgroup per row.
+    if (batch_size <= FC_FORCE_SINGLE_TILE_B) {
+        FUNC_CALL(fc_bf_tiled_kernel_forced_tile_b1)(
+            OPTIONAL_SHAPE_INFO_TENSOR
+            input,
+        #if DECOMPRESSION_SCALE_TERM
+            decompression_scale,
+        #endif
+        #if DECOMPRESSION_ZP_TERM && !DECOMPRESSION_ZP_SCALAR
+            decompression_zp,
+        #endif
+            output,
+            weights
+        #if BIAS_TERM
+            , biases
+        #endif
+        #if HAS_FUSED_OPS_DECLS
+            , FUSED_OPS_ARGS
+        #endif
+        );
+    } else
+#endif
     if (batch_size == 1) {
         FUNC_CALL(fc_bf_tiled_kernel_forced_tile_b1)(
             OPTIONAL_SHAPE_INFO_TENSOR
