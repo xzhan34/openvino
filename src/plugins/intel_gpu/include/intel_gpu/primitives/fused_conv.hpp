@@ -27,17 +27,21 @@ struct fused_conv : public primitive_base<fused_conv> {
     /// @param inputs             A list of Input primitive ids (inputs).
     fused_conv(const primitive_id& id,
                const std::vector<input_info>& inputs,
-               const ov::op::util::VariableInfo& variable_info)
+               const ov::op::util::VariableInfo& variable_info,
+               bool snapshot_mode = false)
         : primitive_base(id, inputs),
-          variable_info(variable_info) {
+          variable_info(variable_info),
+          snapshot_mode(snapshot_mode) {
     }
 
     ov::op::util::VariableInfo variable_info;
+    bool snapshot_mode = false;
 
     size_t hash() const override {
         size_t seed = primitive::hash();
         seed = hash_combine(seed, std::hash<std::string>()(variable_info.variable_id));
         seed = hash_combine(seed, variable_info.data_type.hash());
+        seed = hash_combine(seed, snapshot_mode);
         return seed;
     }
 
@@ -46,7 +50,8 @@ struct fused_conv : public primitive_base<fused_conv> {
             return false;
 
         auto rhs_casted = downcast<const fused_conv>(rhs);
-        return variable_info == rhs_casted.variable_info;
+        return variable_info == rhs_casted.variable_info
+            && snapshot_mode == rhs_casted.snapshot_mode;
     }
 
     void save(BinaryOutputBuffer& ob) const override {
@@ -55,6 +60,7 @@ struct fused_conv : public primitive_base<fused_conv> {
         ob << variable_info.variable_id;
         ob << variable_info.data_shape;
         ob << make_data(&data_type, sizeof(ov::element::Type_t));
+        ob << snapshot_mode;
     }
 
     void load(BinaryInputBuffer& ib) override {
@@ -66,6 +72,7 @@ struct fused_conv : public primitive_base<fused_conv> {
         ib >> data_shape;
         ib >> make_data(&data_type, sizeof(ov::element::Type_t));
         variable_info = {data_shape, data_type, variable_id};
+        ib >> snapshot_mode;
     }
 };
 
