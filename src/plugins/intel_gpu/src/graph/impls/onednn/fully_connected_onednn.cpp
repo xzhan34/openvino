@@ -356,6 +356,28 @@ public:
                 OPENVINO_ASSERT(prim->input_size <= 3, "[GPU] Dynamic quantization for 4D matmul is not implemented");
             } else {
                 attr->set_fpmath_mode(dnnl::fpmath_mode::f16, true);
+                // Force F32 accumulators for compressed INT4 FC to ensure
+                // batch-size-invariant numerical results.  With fpmath_mode::f16
+                // alone, oneDNN may pick different GEMM tiling for different
+                // batch sizes, causing different FP16 accumulation orders and
+                // divergent results.  F32 accumulators are natively supported
+                // on IMMAD (FP16*FP16 → F32 dpas) so impact is minimal.
+                // Override: set OV_GPU_ONEDNN_FC_ACC_MODE=f16|strict|any
+                static const auto acc_mode_override = []() -> int {
+                    auto* env = std::getenv("OV_GPU_ONEDNN_FC_ACC_MODE");
+                    if (!env) return 0;  // default: use f32
+                    std::string val(env);
+                    if (val == "f16") return 1;
+                    if (val == "strict") return 2;
+                    if (val == "any") return 3;
+                    return 0;
+                }();
+                switch (acc_mode_override) {
+                    case 1: attr->set_accumulation_mode(dnnl::accumulation_mode::f16); break;
+                    case 2: attr->set_accumulation_mode(dnnl::accumulation_mode::strict); break;
+                    case 3: attr->set_accumulation_mode(dnnl::accumulation_mode::any); break;
+                    default: attr->set_accumulation_mode(dnnl::accumulation_mode::f32); break;
+                }
             }
 
             auto weights_layout = impl_params.get_input_layout(1);
