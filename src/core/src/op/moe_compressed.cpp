@@ -53,9 +53,8 @@ std::ostream& operator<<(std::ostream& s, const MOECompressed::RoutingType& type
     return s << as_string(type);
 }
 
-}  // namespace ov::op::internal
-
-namespace ov {
+}  // namespace internal
+}  // namespace op
 
 template <>
 EnumNames<ov::op::internal::MOECompressed::RoutingType>& EnumNames<ov::op::internal::MOECompressed::RoutingType>::get() {
@@ -67,6 +66,5 @@ EnumNames<ov::op::internal::MOECompressed::RoutingType>& EnumNames<ov::op::inter
                                                                  });
     return enum_names;
 }
-
 
 }  // namespace ov
