@@ -34,8 +34,8 @@ Follow the instructions below to install the latest NPU drivers:
 
 .. note::
 
-   The NPU compiler library was first introduced in the OpenVINO 2026.0 release package as a preview feature (`Compiler-In-Plugin`).
-   Starting with the 2026.1 release, `Compiler-In-Plugin` becomes the preferred compiler type used by the NPU Plugin.
+   Starting with the 2026.0 release, the compiler library is available in the OpenVINO package as a preview feature (``Compiler-In-Plugin``).
+   The default compiler type remains ``Compiler-In-Driver`` (the compiler library included in the driver package).
    Users can override the default compiler selection by setting ``ov::intel_npu::compiler_type``.
 
 The plugin uses either the NPU compiler library included in the driver or
@@ -286,14 +286,15 @@ Users can set ``ov::intel_npu::tiles`` to override the number of tiles selected 
 **ov::intel_npu::compiler_type**
 
 This property allows users to override the default compiler type selected by the plugin.
-By default, the NPU Plugin behavior corresponds to the ``PREFER_PLUGIN`` setting.
-In this mode, the integrated compiler (``Compiler-In-Plugin``) is used when all the following conditions are met:
+
+To use ``Compiler-In-Plugin`` whenever possible, users can set the property to ``PREFER_PLUGIN``.
+This instructs the plugin to use the integrated compiler when all the following conditions are met:
 
 - The library is present
 - The compiler supports the current platform ``or`` there is no platform detected (offline compilation)
 - Compatibility is maintained between the current compiler version and all drivers released for the platform ``or`` there is no platform detected (offline compilation)
 
-Note: On Meteor Lake (3720), when the property is set to ``PREFER_PLUGIN`` (by default), the plugin will fall back to ``Compiler-in-Driver`` because
+Note: On Meteor Lake (3720), when the property is set to ``PREFER_PLUGIN``, the plugin will fall back to ``Compiler-in-Driver`` because
 the compiler library integrated in the plugin may not be compatible with driver versions lower than v2565.
 Users can set ``ov::intel_npu::compiler_type`` to ``PLUGIN`` to force ``Compiler-in-Plugin``, but the blob will fail to execute on incompatible drivers.
 

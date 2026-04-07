@@ -1423,12 +1423,14 @@ public:
                 return;
             }
 
+            const bool allow_gqa = can_use_gqa_kernel(params, PagedAttentionStage::GENERATE, rt_params->max_context_len);
             if (rt_params->use_micro_sdpa) {
                 size_t kv_group_size = desc->heads_num / desc->kv_heads_num;
-                rt_params->use_gqa_kernel = (kv_group_size == 8 && desc->k_head_size == 64);
-                rt_params->use_micro_sdpa = rt_params->use_gqa_kernel;
+                const bool allow_micro_gqa = allow_gqa && kv_group_size == 8 && desc->k_head_size == 64;
+                rt_params->use_gqa_kernel = allow_micro_gqa;
+                rt_params->use_micro_sdpa = allow_micro_gqa;
             } else {
-                rt_params->use_gqa_kernel = can_use_gqa_kernel(params, PagedAttentionStage::GENERATE, rt_params->max_context_len);
+                rt_params->use_gqa_kernel = allow_gqa;
             }
         } else {
             rt_params->use_gqa_kernel = false;

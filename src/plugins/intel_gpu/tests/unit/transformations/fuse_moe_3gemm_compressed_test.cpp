@@ -5,8 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "common_test_utils/ov_test_utils.hpp"
-#include "intel_gpu/op/moe_compressed.hpp"
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
+#include "openvino/op/moe_compressed.hpp"
+#include "openvino/op/moe_3gemm_fused_compressed.hpp"
 #include "openvino/op/constant.hpp"
 #include "openvino/op/matmul.hpp"
 #include "openvino/op/reshape.hpp"
@@ -72,7 +72,7 @@ TEST_P(FuseMOE3GemmCompressedTest, CompareFunctions) {
         auto scale_down = op::v0::Constant::create(element::f16, Shape{128, 6, 2048}, {0.01f});
         auto zp_down = op::v0::Constant::create(element::u4, Shape{128, 6, 2048}, {0});
 
-        ov::intel_gpu::op::MOECompressed::Config config;
+        ov::op::internal::MOECompressed::Config config;
         config.hidden_size = 2048;
         config.inter_size = 768;
         config.num_expert = 128;
@@ -85,7 +85,7 @@ TEST_P(FuseMOE3GemmCompressedTest, CompareFunctions) {
         auto moe_input_0 = reshape_on_moe_input
             ? ov::Output<ov::Node>(hidden_states_reshape)
             : ov::Output<ov::Node>(hidden_states);
-        auto moe_compressed = std::make_shared<ov::intel_gpu::op::MOECompressed>(
+        auto moe_compressed = std::make_shared<ov::op::internal::MOECompressed>(
             ov::OutputVector{moe_input_0, unsqueeze_moe, topk_indices,
                 wei_gate, scale_gate, zp_gate, wei_up, scale_up, zp_up, wei_down, scale_down, zp_down}, config);
         model = std::make_shared<ov::Model>(moe_compressed, ov::ParameterVector{hidden_states});
@@ -109,7 +109,7 @@ TEST_P(FuseMOE3GemmCompressedTest, CompareFunctions) {
         auto scale_down = op::v0::Constant::create(element::f16, Shape{128, 6, 2048}, {0.01f});
         auto zp_down = op::v0::Constant::create(element::u4, Shape{128, 6, 2048}, {0});
 
-        ov::intel_gpu::op::MOECompressed::Config config;
+        ov::op::internal::MOECompressed::Config config;
         config.hidden_size = 2048;
         config.inter_size = 768;
         config.num_expert = 128;
@@ -117,12 +117,13 @@ TEST_P(FuseMOE3GemmCompressedTest, CompareFunctions) {
         config.top_k = 8;
         config.out_type = ov::element::f16;
         if (routing_type == MoERoutingType::SOFTMAX) {
-            config.routing_type = ov::intel_gpu::op::MOECompressed::RoutingType::SOFTMAX;
+            config.routing_type = ov::op::internal::MOECompressed::RoutingType::SOFTMAX;
         } else if (routing_type == MoERoutingType::SIGMOID_BIAS) {
-            config.routing_type = ov::intel_gpu::op::MOECompressed::RoutingType::SIGMOID_BIAS;
+            config.routing_type = ov::op::internal::MOECompressed::RoutingType::SIGMOID_BIAS;
         } else {
             OPENVINO_THROW("Unsupported routing type");
         }
+
 
         ov::OutputVector args{hidden_states_reshape, routing_weights,
             wei_gate, scale_gate, zp_gate, wei_up, scale_up, zp_up, wei_down, scale_down, zp_down};
@@ -133,7 +134,7 @@ TEST_P(FuseMOE3GemmCompressedTest, CompareFunctions) {
             args.push_back(routing_eps);
         }
 
-        std::shared_ptr<ov::Node> result = std::make_shared<ov::intel_gpu::op::MOE3GemmFusedCompressed>(args, config);
+        std::shared_ptr<ov::Node> result = std::make_shared<ov::op::internal::MOE3GemmFusedCompressed>(args, config);
 
         // When reshape_on_moe_input is false, MOE3GemmFusedCompressed takes reshaped input from routing subgraph,
         // so the transformation inserts a reshape-back to restore the original shape.
