@@ -24,7 +24,17 @@ public:
         : ocl_base_event(queue_stamp)
         , _event(ev) {}
 
+    // Construct a synthetic event with a pre-computed duration (nanoseconds).
+    // Used by oneDNN batch-1 loop profiling where we aggregate durations
+    // without an actual OpenCL event.
+    explicit ocl_event(uint64_t duration_ns)
+        : ocl_base_event(0)
+        , _event()
+        , _synthetic_duration_ns(duration_ns) {}
+
     cl::Event& get() override { return _event; }
+
+    uint64_t get_synthetic_duration_ns() const { return _synthetic_duration_ns; }
 
 private:
     bool _callback_set = false;
@@ -41,6 +51,7 @@ private:
 
 protected:
     cl::Event _event;
+    uint64_t _synthetic_duration_ns = 0;
 };
 
 struct ocl_events : public ocl_base_event {

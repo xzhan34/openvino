@@ -100,6 +100,12 @@ static const std::vector<profiling_period_ocl_start_stop> profiling_periods{
 };
 
 bool ocl_event::get_profiling_info_impl(std::list<instrumentation::profiling_interval>& info) {
+    // Synthetic event created with a pre-computed duration (e.g. oneDNN batch-1 loop profiling).
+    if (_synthetic_duration_ns > 0) {
+        info.push_back(get_profiling_interval(instrumentation::profiling_stage::executing, 0, _synthetic_duration_ns));
+        return true;
+    }
+
     if (!is_event_profiled(_event))
         return true;
 
