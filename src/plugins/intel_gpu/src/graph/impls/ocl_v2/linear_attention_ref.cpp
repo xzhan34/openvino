@@ -53,6 +53,8 @@ protected:
         jit.make("IO_TYPE", io_type);
         jit.make("SCALE_FACTOR", scale_factor);
         jit.make("OUTPUT_STATE", output_state);
+        const auto snapshot_all = params.output_layouts.size() > 2 ? 1 : 0;
+        jit.make("SNAPSHOT_ALL_STATES", snapshot_all);
 
         return jit;
     }
@@ -146,6 +148,19 @@ public:
             }
             // Write updated state directly to variable memory and avoid explicit Assign.
             args.outputs[1] = variable.get_memory();
+
+            // In snapshot mode (3 outputs), redirect OUTPUT[2] (all_states snapshot)
+            // to persistent memory.  The default pool-allocated buffer can be reclaimed
+            // by later primitives in the same inference, corrupting snapshot data before
+            // restore_variable_from_output reads it.
+            if (args.outputs.size() >= 3) {
+                auto& eng = instance.get_network().get_engine();
+                auto snapshot_layout = args.outputs[2]->get_layout();
+                if (!_snapshot_mem || _snapshot_mem->get_layout() != snapshot_layout) {
+                    _snapshot_mem = eng.allocate_memory(snapshot_layout, false);
+                }
+                args.outputs[2] = _snapshot_mem;
+            }
         }
 
         return args;
@@ -167,6 +182,14 @@ public:
 
             auto ev = PrimitiveImplOCL::execute(events, instance);
             variable.set();
+
+            // Update the framework's output[2] to point to our persistent snapshot
+            // buffer so that downstream reorder nodes (and dep_memory_ptr reads after
+            // inference) see valid data instead of a pool buffer that may be reclaimed.
+            if (instance.outputs_memory_count() >= 3 && _snapshot_mem) {
+                instance.set_output_memory(_snapshot_mem, false, 2);
+            }
+
             return ev;
         }
 
@@ -176,6 +199,11 @@ public:
     [[nodiscard]] std::unique_ptr<primitive_impl> clone() const override {
         return make_deep_copy<LinearAttentionRefImpl>(this);
     }
+
+private:
+    // Persistent buffer for snapshot output (OUTPUT[2]).  Allocated outside the
+    // memory pool so it cannot be reclaimed by later primitives.
+    mutable cldnn::memory::ptr _snapshot_mem;
 };
 
 }  // namespace

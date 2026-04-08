@@ -117,6 +117,34 @@ public:
      */
     virtual const std::vector<ov::Output<const ov::Node>>& get_outputs() const = 0;
 
+    /**
+     * @brief GPU-accelerated restore of a variable state from an internal output tensor slice.
+     *
+     * After batch inference that produces per-token state snapshots (5D output [B,T,H,K,V]),
+     * this method copies the state at @p token_position directly on GPU without CPU round-trip.
+     *
+     * @param variable_name Name of the variable state (e.g. "linear_states.0.recurrent").
+     * @param output_name   Name of the 5D snapshot output (e.g. "all_linear_states.layer0").
+     * @param token_position Which token position in dimension 1 to select.
+     */
+    virtual void restore_variable_from_output(const std::string& variable_name,
+                                              const std::string& output_name,
+                                              size_t token_position) {
+        OPENVINO_THROW("restore_variable_from_output is not supported by this plugin");
+    }
+
+    /**
+     * @brief Trim a variable state's dimension in-place (zero-copy on GPU).
+     * @param variable_name Name of the variable state.
+     * @param trim_amount   Number of entries to remove from the end of the axis.
+     * @param axis           The dimension to trim.
+     */
+    virtual void trim_variable_state(const std::string& variable_name,
+                                     size_t trim_amount,
+                                     size_t axis) {
+        OPENVINO_THROW("trim_variable_state is not supported by this plugin");
+    }
+
 protected:
     /**
      * @brief Check that all tensors are valid. Throws an exception if it's not.

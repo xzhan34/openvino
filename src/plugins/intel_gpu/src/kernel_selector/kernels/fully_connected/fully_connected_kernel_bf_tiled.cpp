@@ -8,6 +8,7 @@
 #include "swiglu/swiglu_kernel_base.h"
 #include <vector>
 #include <functional>
+#include <cstdlib>
 #include "common_types.h"
 
 static constexpr size_t lws_batches = 8;
@@ -43,6 +44,20 @@ static inline bool is_dyn_b_batch_beneficial(size_t batch, size_t ifm, size_t of
 }
 
 namespace kernel_selector {
+
+namespace {
+// Environment variable threshold: when batch <= threshold, force FORCED_TILE_B=1 dispatch
+// so that each row in a small batch is processed identically to batch=1.
+// This ensures numerical consistency between batch=K+1 verify and sequential single-token
+// processing in speculative decoding (MTP) with INT4 quantized weights.
+int get_fc_single_batch_threshold() {
+    static int threshold = []() {
+        const char* env = std::getenv("OV_GPU_FC_SINGLE_BATCH_THRESHOLD");
+        return env ? std::atoi(env) : 0;
+    }();
+    return threshold;
+}
+}  // namespace
 
 namespace fc_kernel_bf_tiled_utils {
 std::pair<size_t, size_t> get_input_bf_size(const fully_connected_params& params) {
@@ -788,6 +803,28 @@ JitConstants FullyConnected_bf_tiled::GetJitConstants(const fully_connected_para
 
     jit.AddConstant(MakeJitConstant("TILE_B", dispatchData.tile_m));
     jit.AddConstant(MakeJitConstant("HALF_TILE_B", dispatchData.tile_m/2));
+
+    // Unconditional debug to verify FC bf_tiled kernel is being used
+    {
+        WeightsType wdt = params.weights.GetDType();
+        std::cerr << "[FC_BF_TILED_JIT] tile_b=" << dispatchData.tile_m
+                  << " is_dynamic=" << params.is_shape_agnostic
+                  << " wtype=" << static_cast<int>(wdt)
+                  << " compressed=" << params.compressed
+                  << " INT4=" << (wdt == WeightsType::UINT4 || wdt == WeightsType::INT4 ? 1 : 0)
+                  << std::endl;
+    }
+
+    // Force single-tile-b dispatch for small batches (speculative decoding consistency)
+    int fc_single_batch_threshold = get_fc_single_batch_threshold();
+    if (fc_single_batch_threshold > 0) {
+        jit.AddConstant(MakeJitConstant("FC_FORCE_SINGLE_TILE_B", fc_single_batch_threshold));
+        std::cerr << "[FC_TILE_B_FIX] JIT: FC_FORCE_SINGLE_TILE_B=" << fc_single_batch_threshold
+                  << " is_dynamic=" << params.is_shape_agnostic
+                  << " compressed_INT4=" << ((params.weights.GetDType() == WeightsType::UINT4 || params.weights.GetDType() == WeightsType::INT4) ? 1 : 0)
+                  << std::endl;
+    }
+
     jit.AddConstant(MakeJitConstant("TILE_OFM", dispatchData.tile_n));
     jit.AddConstant(MakeJitConstant("TILE_IFM", dispatchData.tile_mk));
     jit.AddConstant(MakeJitConstant("TILE_K", dispatchData.tile_nk));
@@ -915,6 +952,27 @@ void FullyConnected_bf_tiled::SetDispatchDataFunc(KernelData& kd, const Dispatch
         } else {
             auto dispatchData = SetDefault(prim_params, -1,
                                            use_slm ? static_cast<int>(KernelType::SLM) : static_cast<int>(KernelType::DEFAULT));
+
+            // Force tile_b=1 dispatch for small batches to ensure numerical consistency
+            // with single-token (batch=1) processing in speculative decoding.
+            int fc_threshold = get_fc_single_batch_threshold();
+            if (fc_threshold > 0 && output_batch > 1
+                && output_batch <= static_cast<size_t>(fc_threshold)
+                && !dispatchData.use_slm) {
+                size_t compile_tile_b = dispatchData.tile_m;
+                size_t old_batch_threads = CeilDiv(output_batch, compile_tile_b);
+                size_t new_batch_threads = output_batch;  // tile_b_effective = 1
+                if (old_batch_threads > 0 && new_batch_threads > old_batch_threads) {
+                    std::cerr << "[FC_TILE_B_FIX] UpdateDispatch: batch=" << output_batch
+                              << " compile_tile_b=" << compile_tile_b
+                              << " old_threads=" << old_batch_threads
+                              << " new_threads=" << new_batch_threads
+                              << " gws[0] " << dispatchData.gws[0] << " -> " << (dispatchData.gws[0] / old_batch_threads * new_batch_threads)
+                              << std::endl;
+                    dispatchData.gws[0] = dispatchData.gws[0] / old_batch_threads * new_batch_threads;
+                }
+            }
+
             kd.kernels[execute].params.workGroups.global = dispatchData.gws;
             kd.kernels[execute].params.workGroups.local = dispatchData.lws;
         }

@@ -316,6 +316,35 @@ public:
     std::vector<VariableState> query_state();
 
     /**
+     * @brief GPU-accelerated restore of a variable state from an internal output tensor slice.
+     *
+     * After batch inference that produces per-token state snapshots (5D output [B,T,H,K,V]),
+     * this method copies the state at @p token_position directly on GPU without CPU round-trip.
+     *
+     * @param variable_name Name of the variable state (e.g. "linear_states.0.recurrent").
+     * @param output_name   Name of the 5D snapshot output (e.g. "all_linear_states.layer0").
+     * @param token_position Which token position in dimension 1 to select.
+     */
+    void restore_variable_from_output(const std::string& variable_name,
+                                      const std::string& output_name,
+                                      size_t token_position);
+
+    /**
+     * @brief Trim a variable state's sequence dimension in-place on GPU (zero-copy).
+     *
+     * Reduces the logical size of a KV cache variable state along the given axis
+     * without any data movement. The underlying GPU buffer is reinterpreted with
+     * a smaller shape; data beyond the new boundary becomes unused padding.
+     *
+     * @param variable_name Name of the variable state (e.g. "past_key_values.0.key").
+     * @param trim_amount   Number of entries to remove from the end of the axis.
+     * @param axis           Axis along which to trim (default: 2 = sequence dim for KV cache).
+     */
+    void trim_variable_state(const std::string& variable_name,
+                             size_t trim_amount,
+                             size_t axis = 2);
+
+    /**
      * @brief Resets all internal variable states for relevant infer request to a value specified as
      * default for the corresponding `ReadValue` node
      */

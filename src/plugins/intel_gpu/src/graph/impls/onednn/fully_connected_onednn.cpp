@@ -8,12 +8,14 @@
 #include "intel_gpu/runtime/utils.hpp"
 #include "primitive_onednn_base.h"
 #include "registry/implementation_manager.hpp"
+#include "runtime/ocl/ocl_event.hpp"
 
 #include <oneapi/dnnl/dnnl.hpp>
 
 #include <algorithm>
 #include <memory>
 #include <cmath>
+#include <numeric>
 namespace cldnn {
 namespace onednn {
 
@@ -29,6 +31,25 @@ private:
     int _ds_group_size;
     dnnl::memory::data_type _ds_data_type;
     dnnl::memory::data_type _dzp_data_type;
+
+    // When true, batched execution (M>1) is split into M individual M=1 calls
+    // to ensure numerical identity with decode (M=1).  This prevents oneDNN's
+    // batch-dependent GEMM tiling from causing different FP rounding per row,
+    // which breaks speculative decoding acceptance for INT4 compressed weights.
+    bool _force_batch1_loop = false;
+
+    // Maximum batch size for the batch-1 loop.  Controlled by env var
+    // OV_GPU_ONEDNN_FC_BATCH1_MAX (default 8, set 0 to disable).
+    static int get_batch1_loop_threshold() {
+        static const int threshold = []() -> int {
+            auto* env = std::getenv("OV_GPU_ONEDNN_FC_BATCH1_MAX");
+            if (!env) return 8;
+            std::string val(env);
+            if (val == "0") return 0;
+            try { return std::stoi(val); } catch (...) { return 8; }
+        }();
+        return threshold;
+    }
 
 protected:
     std::unique_ptr<primitive_impl> clone() const override {
@@ -102,10 +123,24 @@ protected:
                                         size_t prim_input_size,
                                         size_t prim_weights_rank,
                                         bool has_bias,
-                                        const dnnl::primitive_attr& attr = dnnl::primitive_attr()) {
+                                        const dnnl::primitive_attr& attr = dnnl::primitive_attr(),
+                                        int64_t batch_override = 0) {
         auto input_layout = impl_params.get_input_layout(0);
         auto weights_layout = impl_params.get_input_layout(1);
         auto output_layout = impl_params.get_output_layout();
+
+        // Override the batch (M) dimension for batch-1 loop mode.
+        // This creates a matmul primitive with M=1 shape so that the same
+        // oneDNN JIT kernel is used for both decode (M=1) and verify (M>1).
+        if (batch_override > 0 && prim_input_size == 2) {
+            auto in_ps = input_layout.get_partial_shape();
+            in_ps[0] = batch_override;
+            input_layout.set_partial_shape(in_ps);
+
+            auto out_ps = output_layout.get_partial_shape();
+            out_ps[0] = batch_override;
+            output_layout.set_partial_shape(out_ps);
+        }
 
         dnnl::memory::format_tag target_fmt;
         dnnl::memory::format_tag weights_fmt;
@@ -206,6 +241,99 @@ protected:
     }
 
 public:
+    // Override execute_impl for batch-1 loop: when _force_batch1_loop is set
+    // and actual M > 1, execute the M=1 primitive once per row.  Each row's
+    // computation uses the exact same oneDNN JIT kernel as decode (M=1),
+    // guaranteeing bit-identical logits and correct speculative decoding
+    // acceptance.
+    event::ptr execute_impl(const std::vector<event::ptr>& events,
+                            typed_primitive_inst<fully_connected>& instance) override {
+        if (!_force_batch1_loop) {
+            return parent::execute_impl(events, instance);
+        }
+
+        auto& network = instance.get_network();
+        auto& stream = network.get_stream();
+        auto net_id = network.get_id();
+        event::ptr event;
+
+        if (_enable_profiling) {
+            if (instance.can_be_optimized()) {
+                return nullptr;
+            }
+            dnnl::reset_profiling(stream.get_onednn_stream());
+        }
+
+        if (!instance.can_be_optimized()) {
+            auto input_layout = instance.get_input_layout(0);
+            auto output_layout = instance.get_output_layout();
+            int64_t M = static_cast<int64_t>(input_layout.batch());
+
+            try {
+                if (M <= 1) {
+                    // Single row — identical to base class
+                    _prim.execute(stream.get_onednn_stream(), _args[net_id]);
+                } else {
+                    // Execute M times with per-row input/output views.
+                    // Weights, decompression scales/ZPs, and scratchpad are
+                    // shared across all rows (they don't depend on M).
+                    auto& input = instance.input_memory(0);
+                    auto& output = instance.output_memory();
+
+                    auto src_desc = _pd.dnnl::primitive_desc_base::src_desc(0);
+                    auto dst_desc = _pd.dnnl::primitive_desc_base::dst_desc(0);
+                    auto base_src_offset = onednn::get_offset(
+                        input_layout, dnnl::memory::desc(src_desc));
+                    auto base_dst_offset = onednn::get_offset(
+                        output_layout, dnnl::memory::desc(dst_desc));
+
+                    int64_t K = static_cast<int64_t>(input_layout.feature());
+                    int64_t N = static_cast<int64_t>(output_layout.feature());
+                    int64_t src_elem_size = static_cast<int64_t>(
+                        ov::element::Type(input_layout.data_type).size());
+                    int64_t dst_elem_size = static_cast<int64_t>(
+                        ov::element::Type(output_layout.data_type).size());
+                    int64_t src_row_bytes = K * src_elem_size;
+                    int64_t dst_row_bytes = N * dst_elem_size;
+
+                    // Copy base args once; replace SRC/DST per row
+                    auto row_args = _args[net_id];
+                    for (int64_t row = 0; row < M; row++) {
+                        row_args[DNNL_ARG_SRC] = input.get_onednn_memory(
+                            src_desc, base_src_offset + row * src_row_bytes);
+                        row_args[DNNL_ARG_DST] = output.get_onednn_memory(
+                            dst_desc, base_dst_offset + row * dst_row_bytes);
+                        _prim.execute(stream.get_onednn_stream(), row_args);
+                    }
+                }
+            } catch (dnnl::error& err) {
+                auto err_code = err.status == dnnl_status_t::dnnl_out_of_memory
+                    ? CL_OUT_OF_RESOURCES : CL_INVALID_OPERATION;
+                ocl::rethrow(err.what(), err_code, _engine->get_device_info());
+            }
+
+            if (_enable_profiling) {
+                stream.wait();
+                auto duration = dnnl::get_profiling_data(
+                    stream.get_onednn_stream(),
+                    dnnl::profiling_data_kind::time);
+                if (duration.empty()) {
+                    event = std::make_shared<ocl::ocl_event>(0);
+                } else {
+                    // Sum durations from all per-row executions
+                    uint64_t total = std::accumulate(
+                        duration.begin(), duration.end(), uint64_t{0});
+                    event = std::make_shared<ocl::ocl_event>(total);
+                }
+            } else {
+                if (instance.needs_completion_event())
+                    event = stream.enqueue_marker({});
+            }
+        }
+
+        return event;
+    }
+
     void save(BinaryOutputBuffer& ob) const override {
 #ifdef ONEDNN_PRIMITIVE_SERIALIZATION
         parent::save(ob);
@@ -329,6 +457,21 @@ public:
         }
 
         auto prim_desc = get_matmul_primitive_descriptor(*impl_params, ib.get_engine(), input_size, weights_rank, has_bias, *_attrs);
+
+        // Re-derive batch-1 loop setting for deserialized primitive
+        if (is_compressed && !is_dyn_quan_input && input_size == 2) {
+            auto weight_bitwidth = ov::element::Type(impl_params->get_input_layout(1).data_type).bitwidth();
+            auto input_pshape = impl_params->get_input_layout(0).get_partial_shape();
+            int64_t M = input_pshape[0].is_static() ? input_pshape[0].get_length() : 0;
+            int threshold = get_batch1_loop_threshold();
+            if (weight_bitwidth == 4 && M > 1 && M <= threshold) {
+                prim_desc = get_matmul_primitive_descriptor(
+                    *impl_params, ib.get_engine(), input_size, weights_rank,
+                    has_bias, *_attrs, /*batch_override=*/1);
+                _force_batch1_loop = true;
+            }
+        }
+
         _pd = *prim_desc;
 
         std::vector<uint8_t> prim_cache;
@@ -356,6 +499,28 @@ public:
                 OPENVINO_ASSERT(prim->input_size <= 3, "[GPU] Dynamic quantization for 4D matmul is not implemented");
             } else {
                 attr->set_fpmath_mode(dnnl::fpmath_mode::f16, true);
+                // Force F32 accumulators for compressed INT4 FC to ensure
+                // batch-size-invariant numerical results.  With fpmath_mode::f16
+                // alone, oneDNN may pick different GEMM tiling for different
+                // batch sizes, causing different FP16 accumulation orders and
+                // divergent results.  F32 accumulators are natively supported
+                // on IMMAD (FP16*FP16 → F32 dpas) so impact is minimal.
+                // Override: set OV_GPU_ONEDNN_FC_ACC_MODE=f16|strict|any
+                static const auto acc_mode_override = []() -> int {
+                    auto* env = std::getenv("OV_GPU_ONEDNN_FC_ACC_MODE");
+                    if (!env) return 0;  // default: use f32
+                    std::string val(env);
+                    if (val == "f16") return 1;
+                    if (val == "strict") return 2;
+                    if (val == "any") return 3;
+                    return 0;
+                }();
+                switch (acc_mode_override) {
+                    case 1: attr->set_accumulation_mode(dnnl::accumulation_mode::f16); break;
+                    case 2: attr->set_accumulation_mode(dnnl::accumulation_mode::strict); break;
+                    case 3: attr->set_accumulation_mode(dnnl::accumulation_mode::any); break;
+                    default: attr->set_accumulation_mode(dnnl::accumulation_mode::f32); break;
+                }
             }
 
             auto weights_layout = impl_params.get_input_layout(1);
@@ -444,6 +609,31 @@ public:
             prim_onednn->_ds_group_size = group_size;
             prim_onednn->_ds_data_type = ds_data_type;
             prim_onednn->_dzp_data_type = dzp_data_type;
+
+            // Enable batch-1 loop for compressed INT4 weights with small M to
+            // ensure decode/verify numerical identity (fixes MTP divergence).
+            if (!is_dyn_quan_input && prim->input_size == 2) {
+                auto weight_bitwidth = ov::element::Type(impl_params.get_input_layout(1).data_type).bitwidth();
+                auto input_pshape = impl_params.get_input_layout(0).get_partial_shape();
+                int64_t M = input_pshape[0].is_static() ? input_pshape[0].get_length() : 0;
+                int threshold = get_batch1_loop_threshold();
+                if (weight_bitwidth == 4 && M > 1 && M <= threshold) {
+                    // Re-create with M=1 shape so the oneDNN JIT kernel matches decode
+                    auto b1_prim_desc = get_matmul_primitive_descriptor(
+                        impl_params, impl_params.prog->get_engine(),
+                        prim->input_size, prim->weights_rank, prim->bias.is_valid(),
+                        *attr, /*batch_override=*/1);
+                    prim_onednn = std::make_unique<fully_connected_onednn>(
+                        engine, config, attr, *b1_prim_desc);
+                    prim_onednn->_ds_group_size = group_size;
+                    prim_onednn->_ds_data_type = ds_data_type;
+                    prim_onednn->_dzp_data_type = dzp_data_type;
+                    prim_onednn->_force_batch1_loop = true;
+                    GPU_DEBUG_TRACE << "oneDNN FC batch-1 loop enabled for M="
+                                   << M << std::endl;
+                }
+            }
+
             return prim_onednn;
         } else {
             auto prim_desc = get_matmul_primitive_descriptor(impl_params, impl_params.prog->get_engine(),

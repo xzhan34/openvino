@@ -12,7 +12,14 @@ namespace ov {
 namespace op {
 
 FusedConv::FusedConv(const ov::OutputVector& args, const std::shared_ptr<ov::op::util::Variable>& variable)
-    : ov::op::Op(args) {
+    : ov::op::Op(args), m_snapshot_mode(false) {
+    m_variable = variable;
+    constructor_validate_and_infer_types();
+}
+
+FusedConv::FusedConv(const ov::OutputVector& args, const std::shared_ptr<ov::op::util::Variable>& variable,
+                     bool snapshot_mode)
+    : ov::op::Op(args), m_snapshot_mode(snapshot_mode) {
     m_variable = variable;
     constructor_validate_and_infer_types();
 }
@@ -27,6 +34,8 @@ bool FusedConv::visit_attributes(ov::AttributeVisitor& visitor) {
     visitor.on_attribute("variable_type", variable_info.data_type);
     visitor.on_attribute("variable_shape", variable_info.data_shape);
     m_variable->update(variable_info);
+
+    visitor.on_attribute("snapshot_mode", m_snapshot_mode);
 
     return true;
 }
@@ -91,11 +100,22 @@ void FusedConv::validate_and_infer_types() {
     set_output_type(0, get_input_element_type(0), get_input_partial_shape(0));
     // output[1]: same shape as input[3] = [B, conv_dim, kernel_size]
     set_output_type(1, variable_type, variable_shape);
+
+    // output[2] (snapshot_mode only): [B, S, conv_dim, kernel_size] - per-token conv state snapshots
+    if (m_snapshot_mode) {
+        const auto& input_shape = get_input_partial_shape(0);
+        // input_shape = [B, conv_dim, S], variable_shape = [-1, conv_dim, kernel_size]
+        auto B = input_shape.rank().is_static() ? input_shape[0] : ov::Dimension::dynamic();
+        auto S = (input_shape.rank().is_static() && input_shape.size() >= 3) ? input_shape[2] : ov::Dimension::dynamic();
+        auto conv_dim = variable_shape.rank().is_static() ? variable_shape[1] : ov::Dimension::dynamic();
+        auto kernel_size = variable_shape.rank().is_static() ? variable_shape[2] : ov::Dimension::dynamic();
+        set_output_type(2, variable_type, ov::PartialShape{B, S, conv_dim, kernel_size});
+    }
 }
 
 std::shared_ptr<ov::Node> FusedConv::clone_with_new_inputs(const ov::OutputVector& new_args) const {
     check_new_args_count(this, new_args);
-    return std::make_shared<FusedConv>(new_args, m_variable);
+    return std::make_shared<FusedConv>(new_args, m_variable, m_snapshot_mode);
 }
 
 }  // namespace op

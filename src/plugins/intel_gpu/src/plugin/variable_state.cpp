@@ -11,6 +11,7 @@
 #include "intel_gpu/runtime/memory_caps.hpp"
 #include "intel_gpu/runtime/layout.hpp"
 #include "intel_gpu/runtime/debug_configuration.hpp"
+#include "openvino/core/type/float16.hpp"
 #include <memory>
 
 namespace ov::intel_gpu {
@@ -131,6 +132,109 @@ void VariableState::update_device_buffer() {
 
 ov::element::Type VariableState::get_user_specified_type() const {
     return m_user_specified_type != ov::element::dynamic ? m_user_specified_type : ov::element::Type(m_layout.data_type);
+}
+
+void VariableState::set_state_from_memory_slice(const cldnn::memory::ptr& src_5d_mem,
+                                                size_t token_position,
+                                                const ov::Shape& all_states_shape) {
+    // Supports both 5D (linear states: [B, T, H, K, V]) and 4D (conv states: [B, T, D, KS])
+    OPENVINO_ASSERT(all_states_shape.size() == 5 || all_states_shape.size() == 4,
+                    "Expected 4D or 5D shape for all_states, got ", all_states_shape.size());
+
+    const size_t B = all_states_shape[0];
+    const size_t T = all_states_shape[1];
+
+    // Compute per-token state elements and target shape from remaining dims
+    size_t state_elems = 1;
+    ov::Shape state_shape = {B};
+    for (size_t i = 2; i < all_states_shape.size(); ++i) {
+        state_elems *= all_states_shape[i];
+        state_shape.push_back(all_states_shape[i]);
+    }
+
+    OPENVINO_ASSERT(token_position < T, "token_position ", token_position, " >= T ", T);
+
+    auto src_et = src_5d_mem->get_layout().data_type;
+    size_t src_elem_bytes = ov::element::Type(src_et).size();
+    size_t dst_elem_bytes = ov::element::Type(m_layout.data_type).size();
+
+    // Ensure variable's device buffer is allocated for state_shape
+    m_layout.set_partial_shape(state_shape);
+    update_device_buffer();
+
+    if (actual_size == 0 || m_layout.bytes_count() == 0) {
+        set();
+        return;
+    }
+
+    OPENVINO_ASSERT(m_memory != nullptr, "[GPU] Variable memory is null after update_device_buffer");
+
+    auto& stream = m_context->get_engine().get_service_stream();
+
+    if (src_elem_bytes == dst_elem_bytes) {
+        // Same data type — direct GPU-to-GPU copy with offset
+        if (B == 1) {
+            size_t src_offset = token_position * state_elems * src_elem_bytes;
+            size_t copy_bytes = state_elems * src_elem_bytes;
+            m_memory->copy_from(stream, *src_5d_mem, src_offset, 0, copy_bytes, true);
+        } else {
+            for (size_t b = 0; b < B; ++b) {
+                size_t src_offset = (b * T * state_elems + token_position * state_elems) * src_elem_bytes;
+                size_t dst_offset = b * state_elems * dst_elem_bytes;
+                m_memory->copy_from(stream, *src_5d_mem, src_offset, dst_offset, state_elems * src_elem_bytes, true);
+            }
+        }
+    } else {
+        // Type mismatch (e.g. f32 output → f16 variable): copy slice GPU→CPU, convert, upload
+        size_t slice_bytes = B * state_elems * src_elem_bytes;
+        std::vector<uint8_t> host_buf(slice_bytes);
+
+        for (size_t b = 0; b < B; ++b) {
+            size_t src_offset = (b * T * state_elems + token_position * state_elems) * src_elem_bytes;
+            size_t dst_offset = b * state_elems * src_elem_bytes;
+            src_5d_mem->copy_to(stream, host_buf.data(), src_offset, dst_offset, state_elems * src_elem_bytes, true);
+        }
+
+        // Create a temporary CPU tensor wrapping the host buffer, then use convert_and_copy
+        auto src_ov_et = ov::element::Type(src_et);
+        auto dst_ov_et = ov::element::Type(m_layout.data_type);
+        ov::Tensor dst_host(dst_ov_et, state_shape);
+        size_t total_elems = B * state_elems;
+
+        // Simple element-wise conversion
+        if (src_ov_et == ov::element::f32 && dst_ov_et == ov::element::f16) {
+            auto* sp = reinterpret_cast<const float*>(host_buf.data());
+            auto* dp = reinterpret_cast<ov::float16*>(dst_host.data());
+            for (size_t i = 0; i < total_elems; ++i)
+                dp[i] = ov::float16(sp[i]);
+        } else if (src_ov_et == ov::element::f16 && dst_ov_et == ov::element::f32) {
+            auto* sp = reinterpret_cast<const ov::float16*>(host_buf.data());
+            auto* dp = reinterpret_cast<float*>(dst_host.data());
+            for (size_t i = 0; i < total_elems; ++i)
+                dp[i] = float(sp[i]);
+        } else {
+            OPENVINO_THROW("[GPU] Unsupported type conversion in set_state_from_memory_slice: ",
+                           src_ov_et, " -> ", dst_ov_et);
+        }
+
+        m_memory->copy_from(stream, dst_host.data(), true);
+    }
+
+    set();
+}
+
+void VariableState::trim_state(size_t trim_amount, size_t axis) {
+    auto shape = m_layout.get_shape();
+    OPENVINO_ASSERT(axis < shape.size(),
+                    "[GPU] trim_state: axis ", axis, " >= rank ", shape.size());
+    OPENVINO_ASSERT(shape[axis] >= trim_amount,
+                    "[GPU] trim_state: trim_amount ", trim_amount,
+                    " > dim[", axis, "] = ", shape[axis]);
+
+    shape[axis] -= trim_amount;
+    m_layout.set_partial_shape(shape);
+    update_device_buffer();   // reinterpret_buffer only (no alloc/copy)
+    set();
 }
 
 ov::SoPtr<ov::ITensor> VariableState::get_state() const {

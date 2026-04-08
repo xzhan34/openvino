@@ -10,6 +10,7 @@
 #include "intel_gpu/primitives/kv_cache.hpp"
 #include "intel_gpu/primitives/read_value.hpp"
 #include "intel_gpu/plugin/common_utils.hpp"
+#include "primitive_inst.h"
 #include "intel_gpu/plugin/usm_host_tensor.hpp"
 #include "intel_gpu/plugin/sync_infer_request.hpp"
 #include "intel_gpu/plugin/remote_context.hpp"
@@ -980,6 +981,118 @@ void SyncInferRequest::init_mappings() {
 
 bool SyncInferRequest::is_batched_input(const ov::Output<const ov::Node>& port) const {
     return m_batched_tensors.count(port.get_tensor_ptr()) > 0;
+}
+
+void SyncInferRequest::restore_variable_from_output(const std::string& variable_name,
+                                                    const std::string& output_name,
+                                                    size_t token_position) {
+    // Find the variable
+    auto var_it = m_variables.find(variable_name);
+    OPENVINO_ASSERT(var_it != m_variables.end(), "[GPU] Variable not found: ", variable_name);
+    auto gpu_var = std::dynamic_pointer_cast<VariableState>(var_it->second);
+    OPENVINO_ASSERT(gpu_var, "[GPU] Variable is not a VariableState: ", variable_name);
+
+    // Find the output by matching the user-visible tensor name to port names,
+    // then look up the internal primitive name and retrieve the GPU memory.
+    cldnn::memory::ptr output_mem;
+    ov::Shape output_shape;
+
+    for (const auto& [port_idx, port] : m_output_ports_map) {
+        for (const auto& name : port.get_names()) {
+            if (name == output_name) {
+                auto internal_name = m_output_names_map.at(port_idx);
+                output_mem = m_internal_outputs.at(internal_name).get_memory(false);
+                // Use the actual data layout, not the (potentially inflated) memory layout
+                output_shape = m_internal_outputs.at(internal_name).get_layout().get_shape();
+
+                // The GPU plugin may insert an f16→f32 reorder at the output boundary.
+                // When the output type differs from the variable type, try to use the
+                // pre-reorder dependency memory which stays in device precision (e.g. f16),
+                // enabling a direct GPU-to-GPU copy without CPU round-trip type conversion.
+                auto src_dt = output_mem->get_layout().data_type;
+                auto dst_dt = gpu_var->get_layout().data_type;
+
+                static int dbg_restore_count = 0;
+                if (dbg_restore_count < 5) {
+                    auto src_shape = output_mem->get_layout().get_shape();
+                    fprintf(stderr, "[RESTORE_DBG] var=%s out=%s src_dt=%d dst_dt=%d "
+                        "output_shape=[%zu,%zu,%zu,%zu,%zu] mem_shape=[%zu,%zu,%zu,%zu,%zu] token_pos=%zu\n",
+                        variable_name.c_str(), output_name.c_str(),
+                        (int)src_dt, (int)dst_dt,
+                        output_shape.size()>0?output_shape[0]:0,
+                        output_shape.size()>1?output_shape[1]:0,
+                        output_shape.size()>2?output_shape[2]:0,
+                        output_shape.size()>3?output_shape[3]:0,
+                        output_shape.size()>4?output_shape[4]:0,
+                        src_shape.size()>0?src_shape[0]:0,
+                        src_shape.size()>1?src_shape[1]:0,
+                        src_shape.size()>2?src_shape[2]:0,
+                        src_shape.size()>3?src_shape[3]:0,
+                        src_shape.size()>4?src_shape[4]:0,
+                        token_position);
+                    dbg_restore_count++;
+                }
+
+                if (src_dt != dst_dt) {
+                    auto network = m_graph->get_network();
+                    auto prim_inst = network->get_primitive(internal_name);
+                    if (!prim_inst->dependencies().empty()) {
+                        auto dep_mem = prim_inst->dep_memory_ptr(0);
+                        if (dep_mem && dep_mem->get_layout().data_type == dst_dt) {
+                            if (dbg_restore_count <= 6) {
+                                auto dep_shape = dep_mem->get_layout().get_shape();
+                                fprintf(stderr, "[RESTORE_DBG] Using dep_mem: dt=%d shape=[%zu,%zu,%zu,%zu,%zu]\n",
+                                    (int)dep_mem->get_layout().data_type,
+                                    dep_shape.size()>0?dep_shape[0]:0,
+                                    dep_shape.size()>1?dep_shape[1]:0,
+                                    dep_shape.size()>2?dep_shape[2]:0,
+                                    dep_shape.size()>3?dep_shape[3]:0,
+                                    dep_shape.size()>4?dep_shape[4]:0);
+                            }
+                            output_mem = dep_mem;
+                            // Shape is preserved across a reorder (only format/type changes)
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        if (output_mem) break;
+    }
+    OPENVINO_ASSERT(output_mem, "[GPU] Output not found: ", output_name);
+
+    // Direct GPU-to-GPU slice copy — no CPU round-trip
+    gpu_var->set_state_from_memory_slice(output_mem, token_position, output_shape);
+}
+
+void SyncInferRequest::trim_variable_state(const std::string& variable_name,
+                                           size_t trim_amount,
+                                           size_t axis) {
+    auto var_it = m_variables.find(variable_name);
+    OPENVINO_ASSERT(var_it != m_variables.end(), "[GPU] Variable not found: ", variable_name);
+
+    // Try direct VariableState first (linear_states, etc.)
+    if (auto gpu_var = std::dynamic_pointer_cast<VariableState>(var_it->second)) {
+        gpu_var->trim_state(trim_amount, axis);
+        return;
+    }
+
+    // Handle VariableStateIndirectKVCache: trim the KV cache sub-state and beam table.
+    auto base_var = std::dynamic_pointer_cast<VariableStateBase>(var_it->second);
+    OPENVINO_ASSERT(base_var, "[GPU] Variable is not a VariableStateBase: ", variable_name);
+
+    auto layout = base_var->get_layout();
+    auto shape = layout.get_shape();
+    OPENVINO_ASSERT(axis < shape.size(),
+                    "[GPU] trim: axis ", axis, " >= rank ", shape.size());
+    OPENVINO_ASSERT(shape[axis] >= trim_amount,
+                    "[GPU] trim: trim_amount ", trim_amount,
+                    " > dim[", axis, "] = ", shape[axis]);
+
+    shape[axis] -= trim_amount;
+    auto new_layout = layout;
+    new_layout.set_partial_shape(shape);
+    base_var->set_layout(new_layout);
 }
 
 }  // namespace ov::intel_gpu

@@ -272,6 +272,9 @@ KERNEL(linear_attention_ref)
 #if OUTPUT_STATE
  __global OUTPUT1_TYPE* output_state,
 #endif
+#if SNAPSHOT_ALL_STATES
+ __global OUTPUT2_TYPE* all_states,
+#endif
  int seq_len,
  int key_offset,
  int value_offset) {
@@ -532,6 +535,73 @@ KERNEL(linear_attention_ref)
                 output[out_i_base + i_v] = TO_OUTPUT_TYPE(out_acc);
             }
 #endif
+        }
+#if SNAPSHOT_ALL_STATES
+        // Save per-token intermediate recurrent state for MTP speculative decoding.
+        // all_states layout: [B, T, H_v, K_HEAD_DIMS, V_HEAD_DIMS]
+        // Each work group handles one (b, h, v_block_id) — write V_BLOCK_SIZE v-slices.
+        {
+            __global INPUT5_TYPE* snap_buf = (__global INPUT5_TYPE*)all_states;
+            int snap_token_stride = V_HEAD_NUMS * K_HEAD_DIMS * K_HEAD_DIMS;
+            for (int iv = 0; iv < V_BLOCK_SIZE; iv++) {
+                int i_v = i_v_base + iv;
+                int snap_base = b * seq_len * snap_token_stride
+                              + i * snap_token_stride
+                              + h * K_HEAD_DIMS * K_HEAD_DIMS
+                              + i_v * K_HEAD_DIMS;
+#if (K_HEAD_DIMS == 128)
+#    if (SUBGROUP_SIZE == 8)
+                store_init_state_128_sg8(init_state[iv], snap_buf, snap_base);
+#    else
+                store_init_state_128(&init_state[iv], snap_buf, snap_base);
+#    endif
+#elif (K_HEAD_DIMS % 32) == 0
+#    if (SUBGROUP_SIZE == 16)
+                store_init_state_32_sg16(init_state[iv], snap_buf, snap_base, id_sg_local);
+#    else
+                store_init_state_32(init_state[iv], snap_buf, snap_base, id_sg_local);
+#    endif
+#else
+                store_init_state_generic(init_state[iv], snap_buf, snap_base, id_sg_local);
+#endif
+            }
+        }
+#endif
+        // F16 rounding at token boundary: match sequential single-token precision.
+        // In sequential mode, state is stored as f16 after each token and loaded back
+        // as f16→f32 for the next token. In batch mode (seq_len>1), state stays in f32
+        // registers across tokens. This f32→f16→f32 round-trip ensures batch results
+        // are numerically identical to sequential, preventing logit divergence that
+        // causes degeneration in structured outputs (e.g., VL <think> mode).
+        // Skip the last token since it's followed by the final state store anyway.
+        if (i < seq_len - 1) {
+            for (int iv = 0; iv < V_BLOCK_SIZE; iv++) {
+#if (K_HEAD_DIMS == 128)
+#    if (SUBGROUP_SIZE == 8)
+                init_state[iv][0] = convert_float8(TO_INPUT5_TYPE8(init_state[iv][0]));
+                init_state[iv][1] = convert_float8(TO_INPUT5_TYPE8(init_state[iv][1]));
+#    else
+                init_state[iv] = convert_float8(TO_INPUT5_TYPE8(init_state[iv]));
+#    endif
+#elif (K_HEAD_DIMS % 32) == 0
+#    if (SUBGROUP_SIZE == 16)
+                for (int j = id_sg_local; j < K_HEAD_DIMS; j += 32) {
+                    int idx = j >> 5;
+                    init_state[iv][idx] = convert_float2(TO_INPUT5_TYPE2(init_state[iv][idx]));
+                }
+#    else
+                for (int j = id_sg_local; j < K_HEAD_DIMS; j += SUBGROUP_SIZE) {
+                    int idx = j / SUBGROUP_SIZE;
+                    init_state[iv][idx] = convert_float(TO_INPUT5_TYPE(init_state[iv][idx]));
+                }
+#    endif
+#else
+                for (int j = id_sg_local; j < K_HEAD_DIMS; j += SUBGROUP_SIZE) {
+                    int idx = j / SUBGROUP_SIZE;
+                    init_state[iv][idx] = convert_float(TO_INPUT5_TYPE(init_state[iv][idx]));
+                }
+#endif
+            }
         }
     }
         // store final state

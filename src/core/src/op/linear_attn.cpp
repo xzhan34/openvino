@@ -70,12 +70,18 @@ LinearAttention::LinearAttention(const ov::OutputVector& args, const std::shared
     constructor_validate_and_infer_types();
 }
 
+LinearAttention::LinearAttention(const ov::OutputVector& args,
+                                 const std::shared_ptr<ov::op::util::Variable>& variable,
+                                 bool snapshot_all_states)
+    : ov::op::Op(args),
+      m_snapshot_all_states(snapshot_all_states) {
+    m_variable = variable;
+    constructor_validate_and_infer_types();
+}
+
 bool LinearAttention::visit_attributes(ov::AttributeVisitor& visitor) {
     OV_OP_SCOPE(LinearAttention_visit_attributes);
 
-    // LinearAttention supports both variable-backed and stateless forms.
-    // Only serialize/deserialize variable attributes when variable is present
-    // (or when deserialization creates one from IR attributes).
     visitor.on_attribute("variable_id", m_variable);
     if (m_variable) {
         auto variable_info = m_variable->get_info();
@@ -83,6 +89,7 @@ bool LinearAttention::visit_attributes(ov::AttributeVisitor& visitor) {
         visitor.on_attribute("variable_shape", variable_info.data_shape);
         m_variable->update(variable_info);
     }
+    visitor.on_attribute("snapshot_all_states", m_snapshot_all_states);
 
     return true;
 }
@@ -115,11 +122,30 @@ void LinearAttention::validate_and_infer_types() {
     }
     set_output_type(0, get_input_element_type(0), out_ps);
     set_output_type(1, get_input_element_type(5), h_ps);
+
+    // Output 2: per-token intermediate recurrent states [B, T, H_v, K, V]
+    // Used by MTP speculative decoding to select state at num_accepted position.
+    if (m_snapshot_all_states) {
+        // h_ps = [B, H_v, K, V], q_ps = [B, T, H_q, K]
+        // all_states = [B, T, H_v, K, V]
+        ov::PartialShape snap_ps = h_ps;  // start from [B, H_v, K, V]
+        if (snap_ps.rank().is_static() && q_ps.rank().is_static()) {
+            // Insert T dimension at position 1: [B, T, H_v, K, V]
+            ov::PartialShape snap_5d;
+            snap_5d.push_back(q_ps[0]);   // B
+            snap_5d.push_back(q_ps[1]);   // T (seq_len)
+            for (size_t i = 1; i < snap_ps.size(); i++) {
+                snap_5d.push_back(snap_ps[i]);  // H_v, K, V
+            }
+            snap_ps = snap_5d;
+        }
+        set_output_type(2, get_input_element_type(5), snap_ps);
+    }
 }
 
 std::shared_ptr<ov::Node> LinearAttention::clone_with_new_inputs(const ov::OutputVector& new_args) const {
     if (m_variable) {
-        return std::make_shared<LinearAttention>(new_args, m_variable);
+        return std::make_shared<LinearAttention>(new_args, m_variable, m_snapshot_all_states);
     }
     return std::make_shared<LinearAttention>(new_args);
 }

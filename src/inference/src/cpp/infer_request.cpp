@@ -278,6 +278,22 @@ std::vector<VariableState> InferRequest::query_state() {
     return variable_states;
 }
 
+void InferRequest::restore_variable_from_output(const std::string& variable_name,
+                                                const std::string& output_name,
+                                                size_t token_position) {
+    OV_INFER_REQ_CALL_STATEMENT(
+        _impl->restore_variable_from_output(variable_name, output_name, token_position);
+    )
+}
+
+void InferRequest::trim_variable_state(const std::string& variable_name,
+                                       size_t trim_amount,
+                                       size_t axis) {
+    OV_INFER_REQ_CALL_STATEMENT(
+        _impl->trim_variable_state(variable_name, trim_amount, axis);
+    )
+}
+
 void InferRequest::reset_state(){OV_INFER_REQ_CALL_STATEMENT({
     for (auto&& state : _impl->query_state()) {
         state->reset();
