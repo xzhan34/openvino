@@ -574,8 +574,40 @@ KERNEL(linear_attention_ref)
         // are numerically identical to sequential, preventing logit divergence that
         // causes degeneration in structured outputs (e.g., VL <think> mode).
         // Skip the last token since it's followed by the final state store anyway.
+        //
+        // When SNAPSHOT_ALL_STATES is active, load back from the snapshot buffer instead
+        // of doing a register-only round-trip. This guarantees the rounding goes through
+        // actual memory (preventing the GPU compiler from optimizing away the precision
+        // loss) and ensures the snapshot data is EXACTLY what subsequent tokens use —
+        // critical for kernel-snapshot restore to match sequential processing.
         if (i < seq_len - 1) {
             for (int iv = 0; iv < V_BLOCK_SIZE; iv++) {
+#if SNAPSHOT_ALL_STATES
+                // Load state back from snapshot memory to force memory-based f16 round-trip.
+                {
+                    int i_v = i_v_base + iv;
+                    int snap_base = b * seq_len * V_HEAD_NUMS * K_HEAD_DIMS * K_HEAD_DIMS
+                                  + i * V_HEAD_NUMS * K_HEAD_DIMS * K_HEAD_DIMS
+                                  + h * K_HEAD_DIMS * K_HEAD_DIMS
+                                  + i_v * K_HEAD_DIMS;
+                    __global INPUT5_TYPE* snap_buf = (__global INPUT5_TYPE*)all_states;
+#if (K_HEAD_DIMS == 128)
+#    if (SUBGROUP_SIZE == 8)
+                    load_init_state_128_sg8(init_state[iv], snap_buf, snap_base);
+#    else
+                    load_init_state_128(&init_state[iv], snap_buf, snap_base);
+#    endif
+#elif (K_HEAD_DIMS % 32) == 0
+#    if (SUBGROUP_SIZE == 16)
+                    load_init_state_32_sg16(init_state[iv], snap_buf, snap_base, id_sg_local);
+#    else
+                    load_init_state_32(init_state[iv], snap_buf, snap_base, id_sg_local);
+#    endif
+#else
+                    load_init_state_generic(init_state[iv], snap_buf, snap_base, id_sg_local);
+#endif
+                }
+#else
 #if (K_HEAD_DIMS == 128)
 #    if (SUBGROUP_SIZE == 8)
                 init_state[iv][0] = convert_float8(TO_INPUT5_TYPE8(init_state[iv][0]));
@@ -601,6 +633,7 @@ KERNEL(linear_attention_ref)
                     init_state[iv][idx] = convert_float(TO_INPUT5_TYPE(init_state[iv][idx]));
                 }
 #endif
+#endif  // SNAPSHOT_ALL_STATES
             }
         }
     }

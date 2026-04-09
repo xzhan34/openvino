@@ -76,10 +76,6 @@ KERNEL(fused_conv_ref)(
         // in f32 registers across tokens. This f32→f16→f32 round-trip ensures batch
         // results are numerically identical to sequential processing.
         // Skip the last token since it's followed by the final state store anyway.
-        if (s < seq_len - 1) {
-            for (int k = 0; k < KERNEL_SIZE; k++)
-                state[k] = convert_float(TO_OUTPUT1_TYPE(state[k]));
-        }
 
 #ifdef SNAPSHOT_MODE
         // Save per-token conv state snapshot: all_states[b, s, ch, 0..KERNEL_SIZE-1]
@@ -87,6 +83,18 @@ KERNEL(fused_conv_ref)(
         const int snap_base = ((b * seq_len + s) * CONV_DIM + ch) * KERNEL_SIZE;
         for (int k = 0; k < KERNEL_SIZE; k++)
             all_states[snap_base + k] = TO_OUTPUT2_TYPE(state[k]);
+        // Load back from snapshot for memory-based f16 round-trip (prevents compiler
+        // from optimizing away the precision loss and ensures snapshot data matches
+        // what subsequent tokens use — critical for kernel-snapshot restore).
+        if (s < seq_len - 1) {
+            for (int k = 0; k < KERNEL_SIZE; k++)
+                state[k] = convert_float(all_states[snap_base + k]);
+        }
+#else
+        if (s < seq_len - 1) {
+            for (int k = 0; k < KERNEL_SIZE; k++)
+                state[k] = convert_float(TO_OUTPUT1_TYPE(state[k]));
+        }
 #endif
     }
 
