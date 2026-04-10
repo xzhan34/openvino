@@ -38,6 +38,15 @@ private:
     // which breaks speculative decoding acceptance for INT4 compressed weights.
     bool _force_batch1_loop = false;
 
+    // Whether the FC has dynamically quantized (i8/u8) input.  When true,
+    // the batch-1 loop must also create per-row views of activation scale,
+    // zero-point, and precomputed reduction buffers.
+    bool _is_dyn_quan = false;
+
+    // Input tensor rank (2 = [M,K], 3 = [1,M,K]).  Needed to locate the M
+    // dimension at runtime in execute_impl.
+    size_t _input_size = 2;
+
     // Maximum batch size for the batch-1 loop.  Controlled by env var
     // OV_GPU_ONEDNN_FC_BATCH1_MAX (default 8, set 0 to disable).
     static int get_batch1_loop_threshold() {
@@ -132,13 +141,16 @@ protected:
         // Override the batch (M) dimension for batch-1 loop mode.
         // This creates a matmul primitive with M=1 shape so that the same
         // oneDNN JIT kernel is used for both decode (M=1) and verify (M>1).
-        if (batch_override > 0 && prim_input_size == 2) {
+        // For input_size=2: shape [M, K] → override dim[0]
+        // For input_size=3: shape [1, M, K] → override dim[1]
+        if (batch_override > 0 && (prim_input_size == 2 || prim_input_size == 3)) {
             auto in_ps = input_layout.get_partial_shape();
-            in_ps[0] = batch_override;
+            size_t m_dim = (prim_input_size == 3) ? 1 : 0;
+            in_ps[m_dim] = batch_override;
             input_layout.set_partial_shape(in_ps);
 
             auto out_ps = output_layout.get_partial_shape();
-            out_ps[0] = batch_override;
+            out_ps[m_dim] = batch_override;
             output_layout.set_partial_shape(out_ps);
         }
 
@@ -267,7 +279,10 @@ public:
         if (!instance.can_be_optimized()) {
             auto input_layout = instance.get_input_layout(0);
             auto output_layout = instance.get_output_layout();
-            int64_t M = static_cast<int64_t>(input_layout.batch());
+            // M dimension: dim[0] for 2D input, dim[1] for 3D input
+            int64_t M = (_input_size == 3)
+                ? static_cast<int64_t>(input_layout.feature())
+                : static_cast<int64_t>(input_layout.batch());
 
             try {
                 if (M <= 1) {
@@ -287,8 +302,12 @@ public:
                     auto base_dst_offset = onednn::get_offset(
                         output_layout, dnnl::memory::desc(dst_desc));
 
-                    int64_t K = static_cast<int64_t>(input_layout.feature());
-                    int64_t N = static_cast<int64_t>(output_layout.feature());
+                    // For 2D [M,K]: K=last dim of input, N=last dim of output
+                    // For 3D [1,M,K]: same — K=last, N=last
+                    auto in_ps = input_layout.get_partial_shape();
+                    auto out_ps = output_layout.get_partial_shape();
+                    int64_t K = in_ps[in_ps.size() - 1].get_length();
+                    int64_t N = out_ps[out_ps.size() - 1].get_length();
                     int64_t src_elem_size = static_cast<int64_t>(
                         ov::element::Type(input_layout.data_type).size());
                     int64_t dst_elem_size = static_cast<int64_t>(
@@ -298,11 +317,123 @@ public:
 
                     // Copy base args once; replace SRC/DST per row
                     auto row_args = _args[net_id];
+
+                    // For dyn-quan FC: prepare per-row slicing of activation
+                    // scale, zero-point, and precomputed reduction buffers.
+                    struct DqMeta {
+                        int arg_key;
+                        cldnn::memory* mem;
+                        dnnl::memory::desc row_desc;
+                        int64_t row_bytes;
+                    };
+                    std::vector<DqMeta> dq_views;
+                    if (_is_dyn_quan) {
+                        const auto& prim = instance.get_impl_params()->typed_desc<fully_connected>();
+                        int idx = prim->bias.is_valid() ? 3 : 2;
+                        if (prim->decompression_scale.is_valid()) idx++;
+                        if (prim->decompression_zero_point.is_valid()) idx++;
+
+                        auto add_view = [&](int& cur_idx, int dnnl_key, bool valid) {
+                            if (!valid) return;
+                            auto layout = instance.get_input_layout(cur_idx);
+                            int64_t total_elems = static_cast<int64_t>(layout.count());
+                            int64_t cols = total_elems / M;
+                            int64_t elem_size = static_cast<int64_t>(
+                                ov::element::Type(layout.data_type).size());
+                            auto dt = onednn::convert_data_type(layout.data_type);
+                            dq_views.push_back({
+                                dnnl_key,
+                                &instance.dep_memory(cur_idx),
+                                dnnl::memory::desc({1, cols}, dt,
+                                                   dnnl::memory::format_tag::ab),
+                                cols * elem_size
+                            });
+                            cur_idx++;
+                        };
+                        add_view(idx, DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC_0,
+                                 prim->activation_scale.is_valid());
+                        add_view(idx, DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_SRC_0,
+                                 prim->activation_zero_point.is_valid());
+                        add_view(idx, DNNL_ARG_ATTR_PRECOMPUTED_REDUCTIONS | DNNL_ARG_SRC_0,
+                                 prim->activation_precomputed_reduction.is_valid());
+                    }
+
+                    // For fused binary post-ops (binary_add, binary_mul, etc.):
+                    // The binary operand tensor has shape matching the output
+                    // [1, M, N] and needs per-row slicing just like SRC/DST.
+                    struct PostOpMeta {
+                        int arg_key;
+                        cldnn::memory* mem;
+                        dnnl::memory::desc row_desc;
+                        int64_t row_bytes;
+                    };
+                    std::vector<PostOpMeta> postop_views;
+                    {
+                        auto& fused_prims = instance.get_fused_primitives_onednn();
+                        dnnl::post_ops post_ops = _attrs->get_post_ops();
+                        size_t num_optimized = 0;
+                        for (size_t po_idx = 0; po_idx < fused_prims.size(); po_idx++) {
+                            auto op_type = fused_prims[po_idx].op_type;
+                            auto mem_offset = fused_prims[po_idx].mem_offset;
+                            auto onednn_po_idx = po_idx - num_optimized;
+
+                            bool is_binary_with_mem = false;
+                            switch (op_type) {
+                                case onednn_post_op_type::binary_add:
+                                case onednn_post_op_type::binary_sub:
+                                case onednn_post_op_type::binary_mul:
+                                case onednn_post_op_type::binary_max:
+                                case onednn_post_op_type::binary_min:
+                                case onednn_post_op_type::binary_div:
+                                    is_binary_with_mem = true;
+                                    break;
+                                case onednn_post_op_type::optimized:
+                                    num_optimized++;
+                                    break;
+                                default:
+                                    break;
+                            }
+
+                            if (is_binary_with_mem) {
+                                auto binary_mem = instance.fused_memory(mem_offset);
+                                auto binary_layout = binary_mem->get_layout();
+                                auto binary_ps = binary_layout.get_partial_shape();
+                                // Binary operand should have same M dimension as output
+                                // Get the per-row desc from the post_ops
+                                dnnl::algorithm alg;
+                                dnnl::memory::desc po_desc;
+                                post_ops.get_params_binary(static_cast<int>(onednn_po_idx), alg, po_desc);
+                                // The po_desc is for M=1 (from the batch_override primitive)
+                                // Compute per-row stride of the binary operand
+                                int64_t binary_N = binary_ps[binary_ps.size() - 1].get_length();
+                                int64_t binary_elem_size = static_cast<int64_t>(
+                                    ov::element::Type(binary_layout.data_type).size());
+                                int64_t binary_row_bytes = binary_N * binary_elem_size;
+
+                                int arg_key = DNNL_ARG_ATTR_MULTIPLE_POST_OP(static_cast<int>(onednn_po_idx)) | DNNL_ARG_SRC_1;
+                                postop_views.push_back({
+                                    arg_key,
+                                    binary_mem.get(),
+                                    po_desc,
+                                    binary_row_bytes
+                                });
+                            }
+                        }
+                    }
+
                     for (int64_t row = 0; row < M; row++) {
                         row_args[DNNL_ARG_SRC] = input.get_onednn_memory(
                             src_desc, base_src_offset + row * src_row_bytes);
                         row_args[DNNL_ARG_DST] = output.get_onednn_memory(
                             dst_desc, base_dst_offset + row * dst_row_bytes);
+                        for (auto& dq : dq_views) {
+                            row_args[dq.arg_key] = dq.mem->get_onednn_memory(
+                                dq.row_desc, row * dq.row_bytes);
+                        }
+                        for (auto& po : postop_views) {
+                            row_args[po.arg_key] = po.mem->get_onednn_memory(
+                                po.row_desc, row * po.row_bytes);
+                        }
                         _prim.execute(stream.get_onednn_stream(), row_args);
                     }
                 }
@@ -459,16 +590,19 @@ public:
         auto prim_desc = get_matmul_primitive_descriptor(*impl_params, ib.get_engine(), input_size, weights_rank, has_bias, *_attrs);
 
         // Re-derive batch-1 loop setting for deserialized primitive
-        if (is_compressed && !is_dyn_quan_input && input_size == 2) {
+        if (is_compressed && (input_size == 2 || input_size == 3)) {
             auto weight_bitwidth = ov::element::Type(impl_params->get_input_layout(1).data_type).bitwidth();
             auto input_pshape = impl_params->get_input_layout(0).get_partial_shape();
-            int64_t M = input_pshape[0].is_static() ? input_pshape[0].get_length() : 0;
+            size_t m_dim = (input_size == 3) ? 1 : 0;
+            int64_t M = input_pshape[m_dim].is_static() ? input_pshape[m_dim].get_length() : 0;
             int threshold = get_batch1_loop_threshold();
             if (weight_bitwidth == 4 && M > 1 && M <= threshold) {
                 prim_desc = get_matmul_primitive_descriptor(
                     *impl_params, ib.get_engine(), input_size, weights_rank,
                     has_bias, *_attrs, /*batch_override=*/1);
                 _force_batch1_loop = true;
+                _is_dyn_quan = is_dyn_quan_input;
+                _input_size = input_size;
             }
         }
 
@@ -612,10 +746,14 @@ public:
 
             // Enable batch-1 loop for compressed INT4 weights with small M to
             // ensure decode/verify numerical identity (fixes MTP divergence).
-            if (!is_dyn_quan_input && prim->input_size == 2) {
+            // Works for both static-weight FC (fp16 input) and dynamically
+            // quantized FC (i8 input with activation scale/zp/reduction).
+            if (prim->input_size == 2 || prim->input_size == 3) {
                 auto weight_bitwidth = ov::element::Type(impl_params.get_input_layout(1).data_type).bitwidth();
                 auto input_pshape = impl_params.get_input_layout(0).get_partial_shape();
-                int64_t M = input_pshape[0].is_static() ? input_pshape[0].get_length() : 0;
+                // M dimension: dim[0] for 2D, dim[1] for 3D
+                size_t m_dim = (prim->input_size == 3) ? 1 : 0;
+                int64_t M = input_pshape[m_dim].is_static() ? input_pshape[m_dim].get_length() : 0;
                 int threshold = get_batch1_loop_threshold();
                 if (weight_bitwidth == 4 && M > 1 && M <= threshold) {
                     // Re-create with M=1 shape so the oneDNN JIT kernel matches decode
@@ -629,8 +767,12 @@ public:
                     prim_onednn->_ds_data_type = ds_data_type;
                     prim_onednn->_dzp_data_type = dzp_data_type;
                     prim_onednn->_force_batch1_loop = true;
+                    prim_onednn->_is_dyn_quan = is_dyn_quan_input;
+                    prim_onednn->_input_size = prim->input_size;
                     GPU_DEBUG_TRACE << "oneDNN FC batch-1 loop enabled for M="
-                                   << M << std::endl;
+                                   << M << (is_dyn_quan_input ? " (dyn_quan)" : "")
+                                   << " input_size=" << prim->input_size
+                                   << std::endl;
                 }
             }
 
