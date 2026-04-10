@@ -48,14 +48,17 @@ private:
     size_t _input_size = 2;
 
     // Maximum batch size for the batch-1 loop.  Controlled by env var
-    // OV_GPU_ONEDNN_FC_BATCH1_MAX (default 8, set 0 to disable).
+    // OV_GPU_ONEDNN_FC_BATCH1_MAX (default 0 = disabled).  The SDPA
+    // single-token threshold already ensures batch-invariant attention;
+    // enabling the FC loop (e.g. =8) forces per-row FC execution which
+    // makes verify_time = M * baseline and kills MTP speedup.
     static int get_batch1_loop_threshold() {
         static const int threshold = []() -> int {
             auto* env = std::getenv("OV_GPU_ONEDNN_FC_BATCH1_MAX");
-            if (!env) return 8;
+            if (!env) return 0;
             std::string val(env);
             if (val == "0") return 0;
-            try { return std::stoi(val); } catch (...) { return 8; }
+            try { return std::stoi(val); } catch (...) { return 0; }
         }();
         return threshold;
     }
