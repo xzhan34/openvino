@@ -117,32 +117,24 @@ public:
         GPU_DEBUG_TRACE_DETAIL << "execute indirect = " << is_indirect << ", prefill = " << is_prefill << "\n";
         update_rt_params(instance);
 
-        static int sdpa_dbg_count = 0;
-        if (sdpa_dbg_count < 20) {
-            fprintf(stderr, "[SDPA_DBG] execute #%d: is_prefill=%d is_indirect=%d\n", sdpa_dbg_count, (int)is_prefill, (int)is_indirect);
-            sdpa_dbg_count++;
-        }
-
-        // Force single-token SDPA kernel for small q_len (e.g. MTP speculative decode batch verify)
-        // to ensure numerical consistency with the single-token generation phase.
-        // Controlled by OV_GPU_SDPA_SINGLE_TOKEN_THRESHOLD env var (default 0 = disabled).
+        // Force single-token SDPA kernel for small q_len (e.g. MTP speculative decode
+        // batch verify with K+1 tokens) to ensure numerical consistency with the
+        // single-token generation phase.  The multi-token SDPA kernel uses different
+        // work-group decompositions and FP accumulation patterns that produce subtly
+        // different results, which accumulate across layers and generation steps,
+        // eventually causing greedy degeneration in INT4 quantized models.
+        // Default threshold=8: covers K<=7 speculative decoding without affecting
+        // large prefill performance.  Override: OV_GPU_SDPA_SINGLE_TOKEN_THRESHOLD=N.
         if (is_prefill && !unaligned_head_size(new_params)) {
             static const int64_t force_single_token_threshold = []() -> int64_t {
                 const char* env = std::getenv("OV_GPU_SDPA_SINGLE_TOKEN_THRESHOLD");
-                if (env) fprintf(stderr, "[SDPA_DBG] OV_GPU_SDPA_SINGLE_TOKEN_THRESHOLD=%s\n", env);
-                else fprintf(stderr, "[SDPA_DBG] OV_GPU_SDPA_SINGLE_TOKEN_THRESHOLD not set\n");
-                return env ? std::atoll(env) : 0;
+                return env ? std::atoll(env) : 8;
             }();
             if (force_single_token_threshold > 0) {
                 auto desc = new_params.typed_desc<scaled_dot_product_attention>();
                 const auto target_seq_len = extract_dim(
                     get_transposed_channel(ChannelName::Y, desc->input_q_transpose_order),
                     new_params.input_layouts[0]);
-                fprintf(stderr, "[SDPA_DBG] is_prefill=1 q_len_static=%d q_len=%lld threshold=%lld has_stage=%d\n",
-                    (int)target_seq_len.is_static(),
-                    target_seq_len.is_static() ? (long long)target_seq_len.get_length() : -1LL,
-                    (long long)force_single_token_threshold,
-                    (int)has_stage(is_indirect ? indirect_single_token : regular_single_token));
                 if (target_seq_len.is_static() &&
                     static_cast<int64_t>(target_seq_len.get_length()) <= force_single_token_threshold &&
                     has_stage(is_indirect ? indirect_single_token : regular_single_token)) {
