@@ -228,8 +228,10 @@ clEnqueueMemFillINTEL_fn)(
 #endif // cl_khr_device_uuid
 
 // some versions of CL/opencl.hpp don't define C++ wrapper for CL_DEVICE_UUID_KHR
-// we are checking it in cmake and defined macro OV_GPU_OPENCL_HPP_HAS_UUID if it is defined
-#ifndef OV_GPU_OPENCL_HPP_HAS_UUID
+// we are checking it in cmake and defined macro OV_GPU_OPENCL_HPP_HAS_UUID if it is defined.
+// Also guard against the case where cl2.hpp forwards to opencl.hpp (which already declares these
+// traits when cl_khr_device_uuid is defined), but cmake failed to detect opencl.hpp.
+#if !defined(OV_GPU_OPENCL_HPP_HAS_UUID) && !(defined(CL_HPP_) && defined(cl_khr_device_uuid))
 
 // for C++ wrappers
 using uuid_array = std::array<cl_uchar, CL_UUID_SIZE_KHR>;
@@ -290,8 +292,9 @@ typedef struct _cl_device_pci_bus_info_khr {
 #endif // cl_khr_pci_bus_info
 
 // some versions of CL/opencl.hpp don't define C++ wrapper for CL_DEVICE_BUS_INFO_KHR
-// we are checking it in cmake and defined macro OV_GPU_OPENCL_HPP_HAS_BUS_INFO if it is defined
-#ifndef OV_GPU_OPENCL_HPP_HAS_BUS_INFO
+// we are checking it in cmake and defined macro OV_GPU_OPENCL_HPP_HAS_BUS_INFO if it is defined.
+// Also guard against cl2.hpp forwarding to opencl.hpp which already declares this trait.
+#if !defined(OV_GPU_OPENCL_HPP_HAS_BUS_INFO) && !(defined(CL_HPP_) && defined(cl_khr_pci_bus_info))
 
 namespace cl {
 namespace detail {
