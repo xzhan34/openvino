@@ -124,6 +124,15 @@ inline uint FUNC(get_bt_index_value)(OPTIONAL_SHAPE_INFO_ARG uint b, uint f, uin
 #else
     #define GET_COMPRESSION_INDEX(INPUT, b, f, y, x) GET_DATA_INDEX(INPUT, (b), (0), (y), (0));
 #endif
+#if USE_ASYMMETRIC_QUANTIZATION
+#if COMBINE_SCALES_AND_ZP
+    #define GET_KEY_ZP(comp_offset) key_scale[(comp_offset) + 1]
+    #define GET_VAL_ZP(comp_offset) val_scale[(comp_offset) + 1]
+#else
+    #define GET_KEY_ZP(comp_offset) key_zp[(comp_offset)]
+    #define GET_VAL_ZP(comp_offset) val_zp[(comp_offset)]
+#endif
+#endif
 #endif
 
 #ifdef SDPA_STAGE_0
@@ -159,6 +168,10 @@ KERNEL(sdpa_opt)(
 #if IS_KV_COMPRESSED
     const __global KEY_COMPRESSION_SCALE_TYPE* key_scale,
     const __global VALUE_COMPRESSION_SCALE_TYPE* val_scale,
+#if USE_ASYMMETRIC_QUANTIZATION && !COMBINE_SCALES_AND_ZP
+    const __global KEY_COMPRESSION_ZP_TYPE* key_zp,
+    const __global VALUE_COMPRESSION_ZP_TYPE* val_zp,
+#endif
 #endif
 #ifdef BEAM_TABLE_TYPE
     const __global BEAM_TABLE_TYPE* beam_table,
@@ -282,7 +295,7 @@ KERNEL(sdpa_opt)(
                 const uint comp_offset = GET_COMPRESSION_INDEX(KEY_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, start_partition_idx + seq_len, 0);
                 KEY_COMPRESSION_SCALE_TYPE comp_scale = key_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-                KEY_COMPRESSION_SCALE_TYPE comp_zp = key_scale[comp_offset + 1];
+                KEY_COMPRESSION_SCALE_TYPE comp_zp = GET_KEY_ZP(comp_offset);
 #endif
 #endif
                 uint head_idx_index = 0;
@@ -592,7 +605,7 @@ KERNEL(sdpa_opt)(
             const uint comp_offset = GET_COMPRESSION_INDEX(VALUE_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, start_partition_idx + (seq_len * SUBGROUP_SIZE) + sglid, 0);
             VALUE_COMPRESSION_SCALE_TYPE comp_scale = val_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-            VALUE_COMPRESSION_SCALE_TYPE comp_zp = val_scale[comp_offset + 1];
+            VALUE_COMPRESSION_SCALE_TYPE comp_zp = GET_VAL_ZP(comp_offset);
 #endif
 #endif
 
@@ -647,7 +660,7 @@ KERNEL(sdpa_opt)(
             const uint comp_offset = GET_COMPRESSION_INDEX(VALUE_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, start_partition_idx + seq_len, 0);
             VALUE_COMPRESSION_SCALE_TYPE comp_scale = val_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-            VALUE_COMPRESSION_SCALE_TYPE comp_zp = val_scale[comp_offset + 1];
+            VALUE_COMPRESSION_SCALE_TYPE comp_zp = GET_VAL_ZP(comp_offset);
 #endif
 #endif
 
@@ -872,6 +885,10 @@ KERNEL(sdpa_opt)(
 #if IS_KV_COMPRESSED
     const __global KEY_COMPRESSION_SCALE_TYPE* key_scale,
     const __global VALUE_COMPRESSION_SCALE_TYPE* val_scale,
+#if USE_ASYMMETRIC_QUANTIZATION && !COMBINE_SCALES_AND_ZP
+    const __global KEY_COMPRESSION_ZP_TYPE* key_zp,
+    const __global VALUE_COMPRESSION_ZP_TYPE* val_zp,
+#endif
 #endif
 #ifdef BEAM_TABLE_TYPE
     const __global BEAM_TABLE_TYPE* beam_table,
@@ -1164,7 +1181,7 @@ KERNEL(sdpa_opt)(
                 const uint comp_offset = GET_COMPRESSION_INDEX(KEY_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, seq_len + sglid, 0);
                 KEY_COMPRESSION_SCALE_TYPE comp_scale = key_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-                KEY_COMPRESSION_SCALE_TYPE comp_zp = key_scale[comp_offset + 1];
+                KEY_COMPRESSION_SCALE_TYPE comp_zp = GET_KEY_ZP(comp_offset);
 #endif
 #endif
                 uint head_idx_index = 0;
@@ -1231,7 +1248,7 @@ KERNEL(sdpa_opt)(
                 // const uint comp_offset = GET_COMPRESSION_INDEX(KEY_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, seq_len + sglid, 0);
                 KEY_COMPRESSION_SCALE_TYPE comp_scale = key_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-                KEY_COMPRESSION_SCALE_TYPE comp_zp = key_scale[comp_offset + 1];
+                KEY_COMPRESSION_SCALE_TYPE comp_zp = GET_KEY_ZP(comp_offset);
 #endif
 #endif
                 uint head_idx_index = 0;
@@ -1631,7 +1648,7 @@ KERNEL(sdpa_opt)(
                     const uint comp_offset = GET_COMPRESSION_INDEX(VALUE_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, start_partition_idx + seq_len + sglid, 0);
                     VALUE_COMPRESSION_SCALE_TYPE comp_scale = val_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-                    VALUE_COMPRESSION_SCALE_TYPE comp_zp = val_scale[comp_offset + 1];
+                    VALUE_COMPRESSION_SCALE_TYPE comp_zp = GET_VAL_ZP(comp_offset);
 #endif
 #endif
                     #ifdef V_HEAD_SIZE_LEFTOVER
@@ -1721,7 +1738,7 @@ KERNEL(sdpa_opt)(
                     const uint comp_offset = GET_COMPRESSION_INDEX(VALUE_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, start_partition_idx + (seq_len * SUBGROUP_SIZE) + sglid, 0);
                     VALUE_COMPRESSION_SCALE_TYPE comp_scale = val_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-                    VALUE_COMPRESSION_SCALE_TYPE comp_zp = val_scale[comp_offset + 1];
+                    VALUE_COMPRESSION_SCALE_TYPE comp_zp = GET_VAL_ZP(comp_offset);
 #endif
 #endif // IS_KV_COMPRESSED
 
@@ -1820,7 +1837,7 @@ KERNEL(sdpa_opt)(
                     // const uint comp_offset = GET_COMPRESSION_INDEX(VALUE_COMPRESSION_SCALE, b_idx, b1_idx / BROADCAST_GROUP_SIZE, start_partition_idx + seq_len_leftovers_start + sglid, 0);
                     VALUE_COMPRESSION_SCALE_TYPE comp_scale = val_scale[comp_offset];
 #if USE_ASYMMETRIC_QUANTIZATION
-                    VALUE_COMPRESSION_SCALE_TYPE comp_zp = val_scale[comp_offset + 1];
+                    VALUE_COMPRESSION_SCALE_TYPE comp_zp = GET_VAL_ZP(comp_offset);
 #endif
 #endif
 
