@@ -56,10 +56,8 @@ std::ostream& operator<<(std::ostream& s, const MOECompressed::RoutingType& type
 }  // namespace internal
 }  // namespace op
 
-namespace ov {
-
 template <>
-EnumNames<ov::op::internal::MOECompressed::RoutingType>& EnumNames<ov::op::internal::MOECompressed::RoutingType>::get() {
+OPENVINO_API EnumNames<ov::op::internal::MOECompressed::RoutingType>& EnumNames<ov::op::internal::MOECompressed::RoutingType>::get() {
     static auto enum_names =
         EnumNames<ov::op::internal::MOECompressed::RoutingType>("MOECompressed::RoutingType",
                                                                 {
