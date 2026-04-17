@@ -147,4 +147,19 @@ ov::SoPtr<ov::ITensor> VariableState::get_state() const {
     return tensor;
 }
 
+ov::Shape VariableState::get_shape() const {
+    return m_layout.get_shape();
+}
+
+void VariableState::set_shape(const ov::Shape& shape) {
+    auto new_layout = m_layout;
+    new_layout.set_partial_shape(ov::PartialShape(shape));
+    if (m_memory && new_layout.bytes_count() <= actual_size) {
+        m_layout = new_layout;
+        m_memory = m_context->get_engine().reinterpret_buffer(*m_memory, m_layout);
+    } else {
+        OPENVINO_THROW("Cannot set_shape: new shape exceeds allocated buffer size");
+    }
+}
+
 }  // namespace ov::intel_gpu
