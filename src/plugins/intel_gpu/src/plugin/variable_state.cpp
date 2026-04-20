@@ -153,13 +153,8 @@ ov::Shape VariableState::get_shape() const {
 
 void VariableState::set_shape(const ov::Shape& shape) {
     auto new_layout = m_layout;
-    new_layout.set_partial_shape(ov::PartialShape(shape));
-    if (m_memory && new_layout.bytes_count() <= actual_size) {
-        m_layout = new_layout;
-        m_memory = m_context->get_engine().reinterpret_buffer(*m_memory, m_layout);
-    } else {
-        OPENVINO_THROW("Cannot set_shape: new shape exceeds allocated buffer size");
-    }
+    new_layout.set_partial_shape(shape);
+    set_layout(new_layout);
 }
 
 }  // namespace ov::intel_gpu
