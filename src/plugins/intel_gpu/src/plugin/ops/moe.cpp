@@ -3,9 +3,8 @@
 //
 #include "openvino/op/constant.hpp"
 #include "openvino/op/moe.hpp"
-#include "intel_gpu/op/moe_compressed.hpp"
+#include "openvino/op/moe_compressed.hpp"
 #include "intel_gpu/plugin/program_builder.hpp"
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
 #include "intel_gpu/plugin/common_utils.hpp"
 #include "intel_gpu/plugin/program_builder.hpp"
 #include "intel_gpu/primitives/moe_3gemm_fused_compressed.hpp"
@@ -18,19 +17,10 @@
 
 #include <limits>
 
-namespace ov {
-namespace op {
-namespace internal {
-using MOE3GemmFusedCompressed = ov::intel_gpu::op::MOE3GemmFusedCompressed;
-using MOECompressed = ov::intel_gpu::op::MOECompressed;
-}  // namespace internal
-}  // namespace op
-}  // namespace ov
-
 namespace ov::intel_gpu {
 using namespace cldnn;
 
-static void CreateMOE3GemmFusedCompressedOp(ProgramBuilder& p, const std::shared_ptr<ov::intel_gpu::op::MOE3GemmFusedCompressed>& op) {
+static void CreateMOE3GemmFusedCompressedOp(ProgramBuilder& p, const std::shared_ptr<ov::op::internal::MOE3GemmFusedCompressed>& op) {
     auto inputs = p.GetInputInfo(op);
     const auto& config = op->get_config();
     ///   0: hidden_states - input tensor with hidden representations
@@ -53,7 +43,8 @@ static void CreateMOE3GemmFusedCompressedOp(ProgramBuilder& p, const std::shared
     ///                  shape [num_experts, hidden_size, group_num, 1]
     ///   10: w2_zp - expert zp for final projection for compressed experts,
     ///                  shape [num_experts, hidden_size, group_num, 1]
-    const size_t expected_inputs = config.routing_type == op::MOECompressed::RoutingType::SIGMOID_BIAS ? 13 : 11;
+    const size_t expected_inputs =
+        config.routing_type == ov::op::internal::MOECompressed::RoutingType::SIGMOID_BIAS ? 13 : 11;
     validate_inputs_count(op, {expected_inputs});
 
     const std::string layerName = layer_type_name_ID(op);

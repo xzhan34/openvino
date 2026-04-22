@@ -8,12 +8,12 @@
 #include "openvino/op/moe.hpp"
 #include "openvino/op/op.hpp"
 
-namespace ov::intel_gpu::op {
+namespace ov::op::internal {
 
 /// \brief MOECompressed experts that support compressed weights for GEMM3_SWIGLU MOE.
-class MOECompressed : public ov::op::internal::MOE {
+class OPENVINO_API MOECompressed : public MOE {
 public:
-    OPENVINO_OP("MOECompressed", "gpu_opset", ov::op::internal::MOE);
+    OPENVINO_OP("MOECompressed");
 
     MOECompressed() = default;
     MOECompressed(const OutputVector& args) : MOE(args) {}
@@ -78,15 +78,17 @@ protected:
 
 std::ostream& operator<<(std::ostream& s, const MOECompressed::RoutingType& type);
 
-}  // namespace ov::intel_gpu::op
+}  // namespace ov::op::internal
 
 namespace ov {
 template <>
-class AttributeAdapter<ov::intel_gpu::op::MOECompressed::RoutingType> : public EnumAttributeAdapterBase<ov::intel_gpu::op::MOECompressed::RoutingType> {
+class AttributeAdapter<ov::op::internal::MOECompressed::RoutingType>
+    : public EnumAttributeAdapterBase<ov::op::internal::MOECompressed::RoutingType> {
 public:
-    AttributeAdapter(ov::intel_gpu::op::MOECompressed::RoutingType& value) : EnumAttributeAdapterBase<ov::intel_gpu::op::MOECompressed::RoutingType>(value) {}
+    AttributeAdapter(ov::op::internal::MOECompressed::RoutingType& value)
+        : EnumAttributeAdapterBase<ov::op::internal::MOECompressed::RoutingType>(value) {}
 
-    OPENVINO_RTTI("AttributeAdapter<ov::intel_gpu::op::MOECompressed::RoutingType>");
+    OPENVINO_RTTI("AttributeAdapter<ov::op::internal::MOECompressed::RoutingType>");
     ~AttributeAdapter() override = default;
 };
 }  // namespace ov

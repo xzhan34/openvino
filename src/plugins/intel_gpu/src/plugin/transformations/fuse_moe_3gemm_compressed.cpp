@@ -6,8 +6,8 @@
 
 #include <memory>
 
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
-#include "intel_gpu/op/moe_compressed.hpp"
+#include "openvino/op/moe_compressed.hpp"
+#include "openvino/op/moe_3gemm_fused_compressed.hpp"
 #include "openvino/core/graph_util.hpp"
 #include "openvino/core/node.hpp"
 #include "openvino/core/rt_info.hpp"
@@ -122,13 +122,13 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
                                    down_wei_m,
                                    down_scale_m,
                                    down_zp_m};
-    auto moe_compressed_m = wrap_type<ov::intel_gpu::op::MOECompressed>(moe_inputs);
+    auto moe_compressed_m = wrap_type<ov::op::internal::MOECompressed>(moe_inputs);
 #undef ANY
 
     ov::matcher_pass_callback callback = [OV_CAPTURE_CPY_AND_THIS](ov::pass::pattern::Matcher& m) {
         const auto& pattern_map = m.get_pattern_value_map();
 
-        auto moe_compressed = ov::as_type_ptr<ov::intel_gpu::op::MOECompressed>(pattern_map.at(moe_compressed_m).get_node_shared_ptr());
+        auto moe_compressed = ov::as_type_ptr<ov::op::internal::MOECompressed>(pattern_map.at(moe_compressed_m).get_node_shared_ptr());
         if (!moe_compressed || transformation_callback(moe_compressed)) {
             return false;
         }
@@ -150,10 +150,10 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
         if (pattern_map.count(sig_routing_bias)) {
             args.push_back(pattern_map.at(sig_routing_bias));
             args.push_back(pattern_map.at(sig_eps_value));
-            config.routing_type = ov::intel_gpu::op::MOECompressed::RoutingType::SIGMOID_BIAS;
+            config.routing_type = ov::op::internal::MOECompressed::RoutingType::SIGMOID_BIAS;
         }
 
-        std::shared_ptr<ov::Node> moe_router_fused = std::make_shared<ov::intel_gpu::op::MOE3GemmFusedCompressed>(args, config);
+        std::shared_ptr<ov::Node> moe_router_fused = std::make_shared<ov::op::internal::MOE3GemmFusedCompressed>(args, config);
         ov::copy_runtime_info(moe_compressed, moe_router_fused);
 
         // If MOECompressed's first input was the original (un-reshaped) hidden state

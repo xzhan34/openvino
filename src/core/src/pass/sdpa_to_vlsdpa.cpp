@@ -32,9 +32,10 @@ bool SDPAToVLSDPA::run_on_model(const std::shared_ptr<ov::Model>& model) {
         return false;
     }
 
-    OPENVINO_ASSERT(ov::op::util::has_op_with_type<ov::op::v13::ScaledDotProductAttention>(model),
-                    "No ScaledDotProductAttention operation observed in the graph, cannot perform "
-                    "the SDPAToVLSDPA transformation.");
+    if (!ov::op::util::has_op_with_type<ov::op::v13::ScaledDotProductAttention>(model)) {
+        return false;
+    }
+
     if (transformation_callback(nullptr)) {  // verify plugin-specific determinations
         return false;
     }

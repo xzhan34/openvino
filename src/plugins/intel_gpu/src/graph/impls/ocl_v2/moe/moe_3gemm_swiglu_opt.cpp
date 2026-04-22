@@ -900,9 +900,9 @@ public:
 
         // Don't change the order of stages
         auto routing_type = node.as<moe_3gemm_fused_compressed>().get_primitive()->_config.routing_type;
-        if (routing_type == ov::intel_gpu::op::MOECompressed::RoutingType::SOFTMAX) {
+        if (routing_type == ov::op::internal::MOECompressed::RoutingType::SOFTMAX) {
             add_stage(softmax_topk, params);
-        } else if (routing_type == ov::intel_gpu::op::MOECompressed::RoutingType::SIGMOID_BIAS) {
+        } else if (routing_type == ov::op::internal::MOECompressed::RoutingType::SIGMOID_BIAS) {
             add_stage(sigmoid_bias_topk, params);
         } else {
             OPENVINO_THROW("Unsupported routing type for moe_3gemm_swiglu_opt_impl: ", static_cast<int>(routing_type));
@@ -1042,8 +1042,9 @@ public:
         layout routing_layout(ov::Shape{token_num * max_topk}, data_type, cldnn::format::bfyx);
         internal_buffers.emplace_back(routing_layout, true);     // 5: routing_weights
         internal_buffers.emplace_back(layout_gateup_out, true);  // 6: gate output, scratch.gate has same layout with up
-        // expert masks for gpu
-        layout index_layout(ov::Shape{expert_num, token_num}, ov::element::i32, cldnn::format::bfyx);
+        // expert masks for gpu - each expert may receive up to token_num*max_topk entries in worst case
+        // (when all tokens select the same expert)
+        layout index_layout(ov::Shape{expert_num, token_num * max_topk}, ov::element::i32, cldnn::format::bfyx);
         internal_buffers.emplace_back(index_layout, true);  // 7: expert_mask_batch
         internal_buffers.emplace_back(index_layout, true);  // 8: expert_mask_topk
 
@@ -1075,13 +1076,16 @@ public:
             scratch.gate = intermediates_memories[MOE_INTERNAL_BUFFER_GATE_OUTPUT];
             const auto& config = instance.get_typed_desc<moe_3gemm_fused_compressed>()->_config;
             int expert_num = static_cast<int>(config.num_expert);
+            int max_topk = static_cast<int>(config.top_k);
+            // Each expert may receive up to token_num*max_topk entries in worst case
+            size_t entries_per_expert = token_num * max_topk;
             scratch.expert_masks.resize(expert_num);
             for (int i = 0; i < expert_num; i++) {
-                auto mask_layout = cldnn::layout({static_cast<int>(token_num)}, cldnn::data_types::i32, cldnn::format::get_default_format(1));
+                auto mask_layout = cldnn::layout({static_cast<int>(entries_per_expert)}, cldnn::data_types::i32, cldnn::format::get_default_format(1));
                 scratch.expert_masks[i].batch =
-                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_BATCH], mask_layout, i * token_num * sizeof(int32_t));
+                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_BATCH], mask_layout, i * entries_per_expert * sizeof(int32_t));
                 scratch.expert_masks[i].topk =
-                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_TOPK], mask_layout, i * token_num * sizeof(int32_t));
+                    engine.create_subbuffer(*intermediates_memories[MOE_INTERNAL_BUFFER_EXPERT_MASK_TOPK], mask_layout, i * entries_per_expert * sizeof(int32_t));
             }
         }
 
@@ -1309,8 +1313,7 @@ public:
         auto batch_mem_ptr = scratch.topk_id;
         auto [hidden_states_mem_ptr, hidden_states_layout] = get_input_info(instance, static_cast<size_t>(MOE3GemmInputIndex::HIDDEN_STATES));
         auto routing_mem_ptr = scratch.topk_weights;
-        auto input_layout = instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::HIDDEN_STATES))->get_layout();
-        auto token_num = get_seq_len(input_layout);
+        auto token_num = get_seq_len(hidden_states_layout);
 
         _hidden_size = static_cast<int>(cur_moe->_config.hidden_size);
         _intermediate_size = static_cast<int>(cur_moe->_config.inter_size);
@@ -1779,7 +1782,7 @@ public:
         // routing: softmax+topk or sigmoid+bias+topk
         auto lws_size = config.num_expert;
         cldnn::event::ptr topk_event;
-        if (config.routing_type == ov::intel_gpu::op::MOECompressed::RoutingType::SOFTMAX) {
+        if (config.routing_type == ov::op::internal::MOECompressed::RoutingType::SOFTMAX) {
             topk_event = execute_stage(events,
                                        instance,
                                        *softmax_topk,
@@ -1788,7 +1791,7 @@ public:
                                        {static_cast<size_t>(token_num), lws_size},
                                        {1, lws_size},
                                        instance.needs_completion_event());
-        } else if (config.routing_type == ov::intel_gpu::op::MOECompressed::RoutingType::SIGMOID_BIAS) {
+        } else if (config.routing_type == ov::op::internal::MOECompressed::RoutingType::SIGMOID_BIAS) {
             topk_event = execute_stage(events,
                                        instance,
                                        *sigmoid_bias_topk,
