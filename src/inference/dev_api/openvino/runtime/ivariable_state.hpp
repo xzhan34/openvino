@@ -51,6 +51,17 @@ public:
      */
     virtual ov::SoPtr<ov::ITensor> get_state() const;
 
+    /**
+     * @brief Returns the shape of the variable state without copying data.
+     */
+    virtual ov::Shape get_shape() const;
+
+    /**
+     * @brief Sets the shape of the variable state in-place (zero-copy on GPU).
+     * @note Default implementation throws ov::NotImplemented.
+     */
+    virtual void set_shape(const ov::Shape& shape);
+
 protected:
     /**
      * @brief A default dtor

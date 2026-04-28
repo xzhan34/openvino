@@ -74,6 +74,16 @@ public:
      * @param state The current state to set.
      */
     void set_state(const Tensor& state);
+
+    /**
+     * @brief Returns the shape of the variable state (zero-copy on GPU).
+     */
+    Shape get_shape() const;
+
+    /**
+     * @brief Sets the shape in-place (zero-copy on GPU for KV cache trimming).
+     */
+    void set_shape(const Shape& shape);
 };
 
 }  // namespace ov
