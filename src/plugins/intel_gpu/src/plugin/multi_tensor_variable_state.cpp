@@ -222,7 +222,49 @@ void VariableStateIndirectKVCacheCompressed::set_state(const ov::SoPtr<ov::ITens
 }
 
 ov::SoPtr<ov::ITensor> VariableStateIndirectKVCacheCompressed::get_state() const {
-    OPENVINO_THROW("[GPU] get_state API is supported only when KV-cache compression is disabled");
+    // Delegate to the parent (uncompressed) get_state which handles beam-table rearrangement.
+    // This returns the raw KV data without decompression — sufficient for host-side trimming.
+    return VariableStateIndirectKVCache::get_state();
+}
+
+void VariableStateIndirectKVCacheCompressed::set_shape(const ov::Shape& shape) {
+    // Resize KV data (via parent)
+    const auto old_shape = VariableStateIndirectKVCache::get_shape();
+    VariableStateIndirectKVCache::set_shape(shape);
+
+    // Resize compression scale/zp states along the same concat axis.
+    // Scale and zp have the same seq_len as KV data (group_size=1 on seq axis).
+    const size_t concat_axis = get_concat_axis();
+    if (concat_axis < old_shape.size() && concat_axis < shape.size() &&
+        old_shape[concat_axis] != shape[concat_axis]) {
+        // Update compression scales (m_hidden_states[2])
+        auto scale_shape = m_hidden_states[2]->get_shape();
+        if (concat_axis < scale_shape.size()) {
+            // Compute the delta applied to KV data and apply proportionally to scales.
+            // For typical KV-cache compression, scale_seq == kv_seq (group_size=1 on seq axis).
+            const int64_t delta = static_cast<int64_t>(shape[concat_axis]) -
+                                  static_cast<int64_t>(old_shape[concat_axis]);
+            const int64_t new_scale_seq = static_cast<int64_t>(scale_shape[concat_axis]) + delta;
+            if (new_scale_seq >= 0) {
+                scale_shape[concat_axis] = static_cast<size_t>(new_scale_seq);
+                m_hidden_states[2]->set_shape(scale_shape);
+            }
+        }
+
+        // Update compression zero-points (m_hidden_states[3]) if present
+        if (m_has_zp_state) {
+            auto zp_shape = m_hidden_states[3]->get_shape();
+            if (concat_axis < zp_shape.size()) {
+                const int64_t delta = static_cast<int64_t>(shape[concat_axis]) -
+                                      static_cast<int64_t>(old_shape[concat_axis]);
+                const int64_t new_zp_seq = static_cast<int64_t>(zp_shape[concat_axis]) + delta;
+                if (new_zp_seq >= 0) {
+                    zp_shape[concat_axis] = static_cast<size_t>(new_zp_seq);
+                    m_hidden_states[3]->set_shape(zp_shape);
+                }
+            }
+        }
+    }
 }
 
 }  // namespace ov::intel_gpu

@@ -42,6 +42,8 @@ public:
     VariableState::Ptr get_beam_table_state() const;
     ov::PartialShape get_beam_table_shape(const ov::PartialShape& kv_cache_shape);
 
+    size_t get_concat_axis() const { return m_concat_axis; }
+
 private:
     size_t m_beam_axis = 0;
     size_t m_concat_axis = 0;
@@ -62,6 +64,7 @@ public:
 
     void set_state(const ov::SoPtr<ov::ITensor>& state) override;
     ov::SoPtr<ov::ITensor> get_state() const override;
+    void set_shape(const ov::Shape& shape) override;
 
     VariableState::Ptr get_compression_scale_state() const;
     void set_compression_scale_layout(const cldnn::layout& new_layout);
