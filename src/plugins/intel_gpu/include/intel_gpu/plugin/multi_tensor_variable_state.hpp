@@ -44,7 +44,7 @@ public:
 
     size_t get_concat_axis() const { return m_concat_axis; }
 
-private:
+protected:
     size_t m_beam_axis = 0;
     size_t m_concat_axis = 0;
 };
