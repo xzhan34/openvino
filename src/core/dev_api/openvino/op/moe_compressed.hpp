@@ -6,25 +6,15 @@
 
 #include <optional>
 
-<<<<<<<< HEAD:src/common/transformations/include/ov_ops/moe_compressed.hpp
 #include "openvino/op/moe.hpp"
 #include "openvino/op/op.hpp"
-#include "transformations_visibility.hpp"
 
-namespace ov::op::internal {
-
-/// \brief MOECompressed experts that support compressed weights for GEMM3_SWIGLU MOE.
-class TRANSFORMATIONS_API MOECompressed : public ov::op::internal::MOE {
-public:
-    OPENVINO_OP("MOECompressed", "", ov::op::internal::MOE);
-========
 namespace ov::op::internal {
 
 /// \brief MOECompressed experts that support compressed weights for GEMM3_SWIGLU MOE.
 class OPENVINO_API MOECompressed : public MOE {
 public:
     OPENVINO_OP("MOECompressed");
->>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e)):src/core/dev_api/openvino/op/moe_compressed.hpp
 
     MOECompressed() = default;
 
@@ -80,9 +70,8 @@ public:
     /// \param config Configuration for the MOE operation
     MOECompressed(const OutputVector& args, const Config& config);
 
-    const Config& get_config() const {
-        return m_config;
-    }
+    const Config& get_config() const;
+    void set_config(const Config& config);
     void set_scale_factor(float scale_factor) {
         m_config.scale_factor = scale_factor;
     }
@@ -95,8 +84,7 @@ protected:
     Config m_config;
 };
 
-<<<<<<<< HEAD:src/common/transformations/include/ov_ops/moe_compressed.hpp
-TRANSFORMATIONS_API std::ostream& operator<<(std::ostream& s, const MOECompressed::RoutingType& type);
+OPENVINO_API std::ostream& operator<<(std::ostream& s, const MOECompressed::RoutingType& type);
 
 }  // namespace ov::op::internal
 
@@ -113,6 +101,3 @@ public:
 };
 
 }  // namespace ov
-========
-}  // namespace ov::op::internal
->>>>>>>> 5b848a7470 (add openvino modeling api(old Repo commit:6f9f0d9868514953c6781397c825affa8c85bd2e)):src/core/dev_api/openvino/op/moe_compressed.hpp

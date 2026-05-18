@@ -9,6 +9,7 @@
 #include <intel_gpu/primitives/swiglu.hpp>
 #include <limits>
 
+#include "openvino/op/moe_3gemm_fused_compressed.hpp"
 #include "ov_ops/moe_compressed.hpp"
 #include "intel_gpu/plugin/program_builder.hpp"
 #include "intel_gpu/plugin/common_utils.hpp"
@@ -16,14 +17,6 @@
 #include "intel_gpu/primitives/moe_gemm.hpp"
 #include "intel_gpu/primitives/moe_mask_gen.hpp"
 #include "openvino/op/constant.hpp"
-
-namespace ov {
-namespace op {
-namespace internal {
-using MOE3GemmFusedCompressed = ov::intel_gpu::op::MOE3GemmFusedCompressed;
-}  // namespace internal
-}  // namespace op
-}  // namespace ov
 
 namespace ov::intel_gpu {
 using namespace cldnn;

@@ -1461,6 +1461,8 @@ public:
 
         rt_params->query_block_size = get_query_block_size(rt_params->stage, rt_params->use_micro_sdpa);
 
+        const bool allow_gqa = can_use_gqa_kernel(params, rt_params->stage, rt_params->max_context_len);
+
         if (rt_params->stage == PagedAttentionStage::GENERATE) {
             rt_params->use_micro_sdpa = false;
             if (desc->has_sink_input) {

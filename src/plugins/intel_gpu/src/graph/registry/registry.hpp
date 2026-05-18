@@ -146,6 +146,7 @@ REGISTER_IMPLS(gather_nd);
 REGISTER_IMPLS(gated_delta_net);
 REGISTER_IMPLS(gemm);
 REGISTER_IMPLS(group_normalization);
+REGISTER_IMPLS(linear_attention);
 REGISTER_IMPLS(loop);
 REGISTER_IMPLS(lora);
 REGISTER_IMPLS(lstm_cell);

@@ -223,7 +223,8 @@ ConvertMOEToMOECompressed::ConvertMOEToMOECompressed(bool is_pa) {
                 args[10] = pattern_map.at(gemm3_scale_m_down);
                 args[11] = pattern_map.at(gemm3_zp_m_down);
             }
-            ov::op::internal::MOECompressed::Config config(moe->get_config());
+            ov::op::internal::MOECompressed::Config config;
+            static_cast<ov::op::internal::MOE::Config&>(config) = moe->get_config();
             config.hidden_size = group_compressed ? weight_shape[2] * weight_shape[3] : weight_shape[2];
             config.inter_size = weight_shape[1];
             config.num_expert = weight_shape[0];
@@ -257,7 +258,8 @@ ConvertMOEToMOECompressed::ConvertMOEToMOECompressed(bool is_pa) {
             // Weight, scale, zp are assumed to be transposed
             // W     : [num_experts, N, K]
             // scale : [num_experts, N, K / group_size, 1]
-            ov::op::internal::MOECompressed::Config config(moe->get_config());
+            ov::op::internal::MOECompressed::Config config;
+            static_cast<ov::op::internal::MOE::Config&>(config) = moe->get_config();
             config.num_expert = weight_shape[0];
             config.hidden_size = weight_shape[2];
             if (weight_shape.size() == 4) config.hidden_size *= weight_shape[3];

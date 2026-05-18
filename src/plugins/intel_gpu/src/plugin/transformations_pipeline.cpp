@@ -80,6 +80,7 @@
 #include "plugin/transformations/clamp_fp16_output.hpp"
 #include "plugin/transformations/convert_convolution.hpp"
 #include "plugin/transformations/convert_fc_to_compressed.hpp"
+#include "plugin/transformations/convert_ops_to_gpu_ops.hpp"
 #include "plugin/transformations/convert_matmul_to_fc.hpp"
 #include "plugin/transformations/fuse_moe_shared_expert.hpp"
 #include "transformations/common_optimizations/moe_op_fusion.hpp"
@@ -1511,7 +1512,7 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
         bool fuse_mlp_swiglu = !config.get_use_onednn() &&
                                !device_info.supports_immad &&
                                device_info.execution_units_count >= 128 &&
-                               !disable_fc_swiglu_fusion);
+                               !disable_fc_swiglu_fusion;
         if (!disable_horizontal_fc_fusion) {
             manager.register_pass<ov::intel_gpu::FullyConnectedHorizontalFusion>(fuse_mlp_swiglu);
 

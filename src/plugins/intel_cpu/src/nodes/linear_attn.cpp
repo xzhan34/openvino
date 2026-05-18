@@ -86,7 +86,24 @@ void LinearAttention::execute([[maybe_unused]] const dnnl::stream& strm) {
     PlainTensor initial_states(inputs[5]);
     PlainTensor output(outputs[0]);
     PlainTensor output_hidden_states(outputs[1]);
-    recurrent_linear_attn(query, key, value, beta, g, initial_states, output, output_hidden_states);
+
+    const auto num_worker_threads = context->getCpuParallel()->get_num_worker_threads();
+    const auto head_size = query.m_dims[3];
+    std::vector<float> temp_buffer(num_worker_threads * 3 * head_size, 0.0f);
+
+    recurrent_linear_attn(query,
+                          key,
+                          value,
+                          initial_states,
+                          g,
+                          beta,
+                          1e-6f,
+                          1e-6f,
+                          false,
+                          output,
+                          output_hidden_states,
+                          temp_buffer.data(),
+                          context->getCpuParallel());
 }
 
 bool LinearAttention::isSupportedOperation(const std::shared_ptr<const ov::Node>& op,

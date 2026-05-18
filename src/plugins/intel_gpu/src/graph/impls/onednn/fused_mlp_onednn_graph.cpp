@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#if __has_include(<oneapi/dnnl/dnnl_graph.hpp>)
+
 #include "fused_mlp_onednn_graph.hpp"
 
 #include "primitive_inst.h"
@@ -312,3 +314,5 @@ std::unique_ptr<primitive_impl> FusedMLPImplementationManager::create_impl(const
 }  // namespace cldnn
 
 BIND_BINARY_BUFFER_WITH_TYPE(cldnn::onednn::fused_mlp_onednn_graph)
+
+#endif  // __has_include(<oneapi/dnnl/dnnl_graph.hpp>)
