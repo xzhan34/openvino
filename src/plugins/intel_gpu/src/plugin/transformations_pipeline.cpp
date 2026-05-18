@@ -80,6 +80,7 @@
 #include "plugin/transformations/clamp_fp16_output.hpp"
 #include "plugin/transformations/convert_convolution.hpp"
 #include "plugin/transformations/convert_fc_to_compressed.hpp"
+#include "plugin/transformations/convert_ops_to_gpu_ops.hpp"
 #include "plugin/transformations/convert_matmul_to_fc.hpp"
 #include "plugin/transformations/fuse_moe_shared_expert.hpp"
 #include "transformations/common_optimizations/moe_op_fusion.hpp"
@@ -116,6 +117,7 @@
 #include "transformations/common_optimizations/broadcast_transition.hpp"
 #include "transformations/common_optimizations/common_optimizations.hpp"
 #include "transformations/common_optimizations/convert_quantize_dequantize.hpp"
+#include "transformations/common_optimizations/fuse_linear_attention.hpp"
 #include "transformations/common_optimizations/fuse_rotary_positional_embeddings.hpp"
 #include "transformations/common_optimizations/fuse_gated_delta_net.hpp"
 #include "transformations/common_optimizations/glu_fusion.hpp"
@@ -494,6 +496,8 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
         auto pass_config = manager.get_pass_config();
         manager.set_per_pass_validation(false);
 
+        manager.register_pass<ov::intel_gpu::ConvertExtensionOp>();
+
         // Transformation of SDPA to VLSDPA for QWen2.x-VL,
         // Note: this should be applied before TransposeFusion.
         manager.register_pass<ov::pass::SDPAToVLSDPA>();
@@ -671,6 +675,8 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
         // the "input -> reshape" subgraph is constant-folded in the above "CommonOptimizations"
         // To handle this case, "KeepConstPrecision" is executed again.
         manager.register_pass<ov::pass::KeepConstPrecision>(supported_woq_types, !device_info.supports_immad);
+        // manager.register_pass<ov::pass::PrintModel>("before_la_fusion.cpp");
+        manager.register_pass<ov::pass::LinearAttentionFusion>();
 
         {
             // Disable XAttention if GPU Xe2/Xe3 architectures is unavaiable or IGC incompatiable.

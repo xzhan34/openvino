@@ -26,7 +26,11 @@ OpenVINO Core has the next structure:
 ## Tutorials
 
  * [How to add new operations](./docs/operation_enabling_flow.md).
+<<<<<<< HEAD
  * [How to add OpenVINO Extension](https://docs.openvino.ai/2026/documentation/openvino-extensibility.html). This document is based on the [template_extension](./template_extension/).
+=======
+ * [How to add OpenVINO Extension](https://docs.openvino.ai/2026/documentation/openvino-extensibility.html). This document is based on the [template_extension](./template_extension/new/).
+>>>>>>> cc36c60303 (Doc Update 2026 (#34052))
  * [How to debug the component](./docs/debug_capabilities.md).
 
 ## See also

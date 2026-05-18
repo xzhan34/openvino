@@ -130,6 +130,7 @@ enum class Type : uint8_t {
     Ngram,
     ScaledDotProductAttention,
     PagedAttention,
+    LinearAttention,
     RoPE,
     CausalMaskPreprocess,
     LLMMLP,

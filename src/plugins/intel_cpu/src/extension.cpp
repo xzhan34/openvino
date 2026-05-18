@@ -46,6 +46,7 @@
 #include "openvino/op/paged_attention.hpp"
 #include "openvino/op/paged_causal_conv1d.hpp"
 #include "openvino/op/paged_gated_delta_net.hpp"
+#include "openvino/op/linear_attn.hpp"
 #include "openvino/op/prelu.hpp"
 #include "openvino/op/prior_box.hpp"
 #include "openvino/op/prior_box_clustered.hpp"

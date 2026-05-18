@@ -1461,12 +1461,14 @@ public:
 
         rt_params->query_block_size = get_query_block_size(rt_params->stage, rt_params->use_micro_sdpa);
 
+        const bool allow_gqa = can_use_gqa_kernel(params, rt_params->stage, rt_params->max_context_len);
+
         if (rt_params->stage == PagedAttentionStage::GENERATE) {
             rt_params->use_micro_sdpa = false;
             if (desc->has_sink_input) {
                 rt_params->use_gqa_kernel = false;
             } else {
-                rt_params->use_gqa_kernel = can_use_gqa_kernel(params, PagedAttentionStage::GENERATE, rt_params->max_context_len);
+                rt_params->use_gqa_kernel = allow_gqa;
             }
         } else {
             rt_params->use_gqa_kernel = false;
