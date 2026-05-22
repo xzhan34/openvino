@@ -1,0 +1,331 @@
+# Copyright (C) 2024-2025 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Lightweight build workflow for producing OV developer packages on GitHub-hosted runners.
+# Designed to be consumed cross-repo by openvino.genai.mx via actions/download-artifact.
+# Does NOT require AKS runners or Docker images.
+#
+# Tests are in a separate workflow (test_packages.yml) triggered via workflow_run
+# to stay within the 6h job timeout.
+
+name: Build OV Packages
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      python_versions:
+        description: "Space-separated Python versions to build (empty = no Python)"
+        required: false
+        default: "3.11"
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  CMAKE_BUILD_TYPE: Release
+  BUILD_JOBS: 4  # GitHub-hosted runners have 4 cores
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════
+  # Job 1: Build — compile OV core (no tests), package & upload artifacts
+  # ════════════════════════════════════════════════════════════════════════
+  build:
+    name: Build — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact_suffix: ubuntu22
+          - os: ubuntu-24.04
+            artifact_suffix: ubuntu24
+          - os: windows-latest
+            artifact_suffix: windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ── Linux system dependencies ────────────────────────────────────────
+      - name: Install system dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        env:
+          PYTHON_VERSIONS: ${{ inputs.python_versions || '3.11' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build \
+            libssl-dev libffi-dev \
+            software-properties-common \
+            patchelf fdupes
+          # Python for wheel builds
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          for py in $PYTHON_VERSIONS; do
+            sudo apt-get install -y python${py}-dev python${py}-venv
+            # Ensure pip is available and up-to-date for this python version.
+            # The cmake wheel target uses the system python (not venv), so pip
+            # must be modern enough to have setuptools.command.build support.
+            python${py} -m ensurepip --upgrade 2>/dev/null || true
+            python${py} -m pip install --upgrade pip setuptools wheel 2>/dev/null || \
+              sudo python${py} -m pip install --break-system-packages --upgrade pip setuptools wheel 2>/dev/null || true
+          done
+
+      # ── Compiler cache ─────────────────────────────────────────────────
+      - name: Setup ccache (Linux)
+        if: runner.os == 'Linux'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ov-${{ matrix.artifact_suffix }}-${{ github.ref_name }}
+          restore-keys: |
+            ov-${{ matrix.artifact_suffix }}-
+          max-size: 2G
+
+      - name: Setup sccache (Windows)
+        if: runner.os == 'Windows'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ov-${{ matrix.artifact_suffix }}-${{ github.ref_name }}
+          restore-keys: |
+            ov-${{ matrix.artifact_suffix }}-
+          max-size: 2G
+          variant: sccache
+
+      # ── Configure & Build (Linux) ───────────────────────────────────────
+      - name: Configure CMake (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DENABLE_TESTS=OFF \
+            -DENABLE_SAMPLES=ON \
+            -DENABLE_PYTHON=OFF \
+            -DENABLE_WHEEL=OFF \
+            -DENABLE_DOCS=OFF \
+            -DENABLE_TBBBIND_2_5=OFF \
+            -DENABLE_STRICT_DEPENDENCIES=OFF \
+            -DCMAKE_INSTALL_PREFIX=install/ov
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build build -j${{ env.BUILD_JOBS }}
+
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake --install build --prefix install/ov
+          cmake --install build --prefix install/developer_package --component developer_package
+
+      # ── Configure & Build (Windows) ─────────────────────────────────────
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build ^
+            -G Ninja ^
+            -DCMAKE_BUILD_TYPE=%CMAKE_BUILD_TYPE% ^
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache ^
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
+            -DENABLE_TESTS=OFF ^
+            -DENABLE_SAMPLES=ON ^
+            -DENABLE_PYTHON=OFF ^
+            -DENABLE_WHEEL=OFF ^
+            -DENABLE_DOCS=OFF ^
+            -DENABLE_TBBBIND_2_5=OFF ^
+            -DENABLE_STRICT_DEPENDENCIES=OFF ^
+            -DCMAKE_INSTALL_PREFIX=install\ov
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build build -j %NUMBER_OF_PROCESSORS%
+
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cmake --install build --prefix install\ov
+          cmake --install build --prefix install\developer_package --component developer_package
+
+      # ── Python bindings (Linux only) ────────────────────────────────────
+      - name: Build Python bindings
+        if: runner.os == 'Linux'
+        env:
+          PYTHON_VERSIONS: ${{ inputs.python_versions || '3.11' }}
+        run: |
+          for py_version in $PYTHON_VERSIONS; do
+            py_exec="python${py_version}"
+            if ! command -v "$py_exec" &>/dev/null; then
+              echo "WARNING: $py_exec not found — skipping."
+              continue
+            fi
+            echo "--- Building pyopenvino for Python $py_version ---"
+            PY_BUILD_DIR="build/py${py_version}"
+            PY_VENV="build/venv${py_version}"
+            "$py_exec" -m venv "$PY_VENV"
+            "$PY_VENV/bin/python" -m pip install -q --upgrade pip setuptools wheel numpy
+
+            cmake -DPython3_EXECUTABLE="$PY_VENV/bin/python" \
+                  -DENABLE_PYTHON=ON \
+                  -DENABLE_WHEEL=ON \
+                  -DOpenVINODeveloperPackage_DIR="$(pwd)/build" \
+                  -S src/bindings/python \
+                  -B "$PY_BUILD_DIR"
+            cmake --build "$PY_BUILD_DIR" -j${{ env.BUILD_JOBS }}
+            cmake --install "$PY_BUILD_DIR" --prefix install/ov --component pyopenvino_python${py_version/./_} || true
+          done
+
+      - name: Collect wheels
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p install/wheels
+          find build/ -name "*.whl" -exec cp {} install/wheels/ \;
+          ls -la install/wheels/ || echo "No wheels found"
+
+      # ── Package artifacts ───────────────────────────────────────────────
+      - name: Package developer_package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd install/developer_package
+          tar czf ../developer_package.tar.gz .
+
+      - name: Package OV install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd install/ov
+          tar czf ../ov_package.tar.gz .
+
+      - name: Package developer_package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path install\developer_package\* -DestinationPath install\developer_package.zip
+
+      - name: Package OV install (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path install\ov\* -DestinationPath install\ov_package.zip
+
+      # ── Write manifest ──────────────────────────────────────────────────
+      - name: Write manifest
+        shell: bash
+        env:
+          OV_SHA: ${{ github.sha }}
+          OV_REF: ${{ github.ref }}
+          OV_OS: ${{ matrix.os }}
+          OV_BUILD_TYPE: ${{ env.CMAKE_BUILD_TYPE }}
+          OV_PYTHON_VERSIONS: ${{ inputs.python_versions || '3.11' }}
+        run: |
+          cat > install/manifest.json <<EOF
+          {
+            "ov_sha": "$OV_SHA",
+            "ref": "$OV_REF",
+            "os": "$OV_OS",
+            "build_type": "$OV_BUILD_TYPE",
+            "python_versions": "$OV_PYTHON_VERSIONS",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+      # ── Upload artifacts ────────────────────────────────────────────────
+      - name: Upload developer_package artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ov_developer_package_${{ matrix.artifact_suffix }}
+          path: install/developer_package.tar.gz
+          retention-days: 30
+
+      - name: Upload developer_package artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ov_developer_package_${{ matrix.artifact_suffix }}
+          path: install/developer_package.zip
+          retention-days: 30
+
+      - name: Upload ov_package artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ov_package_${{ matrix.artifact_suffix }}
+          path: install/ov_package.tar.gz
+          retention-days: 30
+
+      - name: Upload ov_package artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ov_package_${{ matrix.artifact_suffix }}
+          path: install/ov_package.zip
+          retention-days: 30
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && hashFiles('install/wheels/*.whl') != ''
+        with:
+          name: ov_wheels_${{ matrix.artifact_suffix }}
+          path: install/wheels/*.whl
+          retention-days: 30
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ov_build_manifest_${{ matrix.artifact_suffix }}
+          path: install/manifest.json
+          retention-days: 30
+
+      # ── Push to ghcr.io (org-wide OV package registry) ──────────────────
+      - name: Install oras CLI
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push OV package to ghcr.io (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          OV_TAG="${{ github.sha }}-${{ matrix.artifact_suffix }}"
+          REPO="ghcr.io/${{ github.repository_owner }}/ov-package"
+          oras push "${REPO}:${OV_TAG}" \
+            install/ov_package.tar.gz:application/gzip \
+            install/developer_package.tar.gz:application/gzip \
+            install/manifest.json:application/json
+          # Also tag as latest for this OS
+          oras tag "${REPO}:${OV_TAG}" "latest-${{ matrix.artifact_suffix }}"
+          echo "Pushed ${REPO}:${OV_TAG}"
+
+      - name: Push OV package to ghcr.io (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          OV_TAG="${{ github.sha }}-${{ matrix.artifact_suffix }}"
+          REPO="ghcr.io/${{ github.repository_owner }}/ov-package"
+          oras push "${REPO}:${OV_TAG}" \
+            install/ov_package.zip:application/zip \
+            install/developer_package.zip:application/zip \
+            install/manifest.json:application/json
+          oras tag "${REPO}:${OV_TAG}" "latest-${{ matrix.artifact_suffix }}"
+          echo "Pushed ${REPO}:${OV_TAG}"
