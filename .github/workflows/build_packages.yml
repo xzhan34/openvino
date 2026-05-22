@@ -254,7 +254,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: ov_developer_package_${{ matrix.artifact_suffix }}
+          name: ov_developer_package_${{ matrix.artifact_suffix }}_${{ github.sha }}
           path: install/developer_package.tar.gz
           retention-days: 30
 
@@ -262,7 +262,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: ov_developer_package_${{ matrix.artifact_suffix }}
+          name: ov_developer_package_${{ matrix.artifact_suffix }}_${{ github.sha }}
           path: install/developer_package.zip
           retention-days: 30
 
@@ -270,7 +270,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: ov_package_${{ matrix.artifact_suffix }}
+          name: ov_package_${{ matrix.artifact_suffix }}_${{ github.sha }}
           path: install/ov_package.tar.gz
           retention-days: 30
 
@@ -278,7 +278,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: ov_package_${{ matrix.artifact_suffix }}
+          name: ov_package_${{ matrix.artifact_suffix }}_${{ github.sha }}
           path: install/ov_package.zip
           retention-days: 30
 
@@ -286,26 +286,29 @@ jobs:
         uses: actions/upload-artifact@v4
         if: runner.os == 'Linux' && hashFiles('install/wheels/*.whl') != ''
         with:
-          name: ov_wheels_${{ matrix.artifact_suffix }}
+          name: ov_wheels_${{ matrix.artifact_suffix }}_${{ github.sha }}
           path: install/wheels/*.whl
           retention-days: 30
 
       - name: Upload manifest
         uses: actions/upload-artifact@v4
         with:
-          name: ov_build_manifest_${{ matrix.artifact_suffix }}
+          name: ov_build_manifest_${{ matrix.artifact_suffix }}_${{ github.sha }}
           path: install/manifest.json
           retention-days: 30
 
       # ── Push to ghcr.io (org-wide OV package registry) ──────────────────
+      # Only push on merge to master — PRs and schedules skip this.
       - name: Install oras CLI
+        if: github.event_name == 'push'
         uses: oras-project/setup-oras@v1
 
       - name: Login to ghcr.io
+        if: github.event_name == 'push'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push OV package to ghcr.io (Linux)
-        if: runner.os == 'Linux'
+        if: github.event_name == 'push' && runner.os == 'Linux'
         run: |
           OV_TAG="${{ github.sha }}-${{ matrix.artifact_suffix }}"
           REPO="ghcr.io/${{ github.repository_owner }}/ov-package"
@@ -318,7 +321,7 @@ jobs:
           echo "Pushed ${REPO}:${OV_TAG}"
 
       - name: Push OV package to ghcr.io (Windows)
-        if: runner.os == 'Windows'
+        if: github.event_name == 'push' && runner.os == 'Windows'
         shell: bash
         run: |
           OV_TAG="${{ github.sha }}-${{ matrix.artifact_suffix }}"
