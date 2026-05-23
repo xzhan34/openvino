@@ -471,7 +471,7 @@ if(ENABLE_OV_TF_LITE_FRONTEND OR ENABLE_INTEL_NPU)
             ov_developer_package_export_targets(TARGET flatbuffers
                     INSTALL_INCLUDE_DIRECTORIES "${flatbuffers_root}/include/")
             ov_developer_package_export_targets(TARGET ProjectConfig)
-            install(FILES ${flatbuffers_COMPILER} DESTINATION "developer_package/bin" COMPONENT developer_package EXCLUDE_FROM_ALL)
+            install(FILES ${flatbuffers_COMPILER} DESTINATION "developer_package/bin" COMPONENT developer_package)
             if (CMAKE_CROSSCOMPILING)
                 # NPU compiler requires flatbuffers and flatc defined as target
                 add_executable(flatc ALIAS flatbuffers::flatc)

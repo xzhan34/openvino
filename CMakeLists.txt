@@ -129,7 +129,7 @@ function(ov_developer_package_export_targets)
             foreach(install_dir IN LISTS EXPORT_INSTALL_INCLUDE_DIRECTORIES)
                 install(DIRECTORY "${install_dir}"
                         DESTINATION "${EXPORT_INSTALL_DESTIONATION}"
-                        COMPONENT developer_package EXCLUDE_FROM_ALL)
+                        COMPONENT developer_package)
             endforeach()
         endif()
     else()

@@ -56,5 +56,5 @@ ov_developer_package_export_targets(TARGET openvino::interpreter_backend)
 
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/"
         DESTINATION developer_package/include/${TARGET_NAME}
-        COMPONENT developer_package EXCLUDE_FROM_ALL
+    COMPONENT developer_package
         FILES_MATCHING PATTERN "*.hpp")
