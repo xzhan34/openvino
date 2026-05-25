@@ -25,3 +25,11 @@ void ov::IVariableState::set_state(const ov::SoPtr<ov::ITensor>& state) {
 ov::SoPtr<ov::ITensor> ov::IVariableState::get_state() const {
     return m_state;
 }
+
+ov::Shape ov::IVariableState::get_shape() const {
+    OPENVINO_NOT_IMPLEMENTED;
+}
+
+void ov::IVariableState::set_shape(const ov::Shape& shape) {
+    OPENVINO_NOT_IMPLEMENTED;
+}

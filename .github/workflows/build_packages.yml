@@ -93,7 +93,7 @@ jobs:
         with:
           key: ov-${{ matrix.artifact_suffix }}-${{ github.ref_name }}
           restore-keys: |
-            ov-${{ matrix.artifact_suffix }}-
+            ov-${{ matrix.artifact_suffix }}
           max-size: 2G
 
       - name: Setup sccache (Windows)
@@ -102,7 +102,7 @@ jobs:
         with:
           key: ov-${{ matrix.artifact_suffix }}-${{ github.ref_name }}
           restore-keys: |
-            ov-${{ matrix.artifact_suffix }}-
+            ov-${{ matrix.artifact_suffix }}
           max-size: 2G
           variant: sccache
 

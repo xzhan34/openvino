@@ -49,4 +49,12 @@ void VariableState::set_state(const Tensor& state) {
     OV_VARIABLE_CALL_STATEMENT(_impl->set_state(get_tensor_impl(state)));
 }
 
+ov::Shape VariableState::get_shape() const {
+    OV_VARIABLE_CALL_STATEMENT(return _impl->get_shape());
+}
+
+void VariableState::set_shape(const ov::Shape& shape) {
+    OV_VARIABLE_CALL_STATEMENT(_impl->set_shape(shape));
+}
+
 }  // namespace ov

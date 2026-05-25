@@ -74,6 +74,18 @@ public:
      * @param state The current state to set.
      */
     void set_state(const Tensor& state);
+
+    /**
+     * @brief Returns the shape of the variable state without copying data.
+     * @return The shape of the variable state
+     */
+    ov::Shape get_shape() const;
+
+    /**
+     * @brief Reshapes the variable state in-place (zero-copy when supported by the plugin).
+     * @param shape The new shape
+     */
+    void set_shape(const ov::Shape& shape);
 };
 
 }  // namespace ov
