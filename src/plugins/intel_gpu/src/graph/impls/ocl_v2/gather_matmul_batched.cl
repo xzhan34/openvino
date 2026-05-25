@@ -103,7 +103,7 @@ __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE))) KERNEL(gather_matmul_b
         unroll_for (int j = 0; j < bc * nbc; j++) {
             if (sg_j0 + j < cur_n_tokens) {
                 int orig_token = token_map[offset + sg_j0 + j];
-                // out[slot, orig_token, :] — row pointer
+                // out[slot, orig_token, :] - row pointer
                 global OUTPUT_TYPE* row_ptr = out_ptr + slot * n_tokens * m + orig_token * m;
                 unroll_for (int i0 = 0; i0 < br * nbr; i0 += sg) {
                     int i = i0 + sglid;

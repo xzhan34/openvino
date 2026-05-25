@@ -235,7 +235,7 @@ KERNEL (index_add_)(const __global MOE_DTYPE* src_tok,
 #define GELU_TANH_C 0.044715f
 
 // ERF Gelu: 0.5 * x * (1 + erf(x / sqrt(2))); 1/sqrt(2) = 0.7071067811865475
-// Fast erf approximation (A&S 7.1.26) — same coefficients as swiglu_gpu_opt.cl
+// Fast erf approximation (A&S 7.1.26) - same coefficients as swiglu_gpu_opt.cl
 inline float moe_fast_erf(float x) {
     if (x > 4.0f) return 1.0f;
     if (x < -4.0f) return -1.0f;

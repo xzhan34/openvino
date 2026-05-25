@@ -98,20 +98,20 @@ public:
         size_t n_all_experts = weight_shape[0];
         size_t max_groups = n_all_experts * top_k;
 
-        // 0: gathered_A — f16, n_tokens * top_k * K
+        // 0: gathered_A - f16, n_tokens * top_k * K
         descs.emplace_back(n_tokens * top_k * k, ov::element::f16);
-        // 1: group_expert_ids — i32, max_groups
+        // 1: group_expert_ids - i32, max_groups
         descs.emplace_back(max_groups, ov::element::i32);
-        // 2: group_slot_ids — i32, max_groups
+        // 2: group_slot_ids - i32, max_groups
         descs.emplace_back(max_groups, ov::element::i32);
-        // 3: group_offsets — i32, max_groups
+        // 3: group_offsets - i32, max_groups
         descs.emplace_back(max_groups, ov::element::i32);
-        // 4: group_sizes — i32, max_groups
+        // 4: group_sizes - i32, max_groups
         descs.emplace_back(max_groups, ov::element::i32);
-        // 5: token_map — i32, n_tokens * top_k
+        // 5: token_map - i32, n_tokens * top_k
         // Also used as scratch during sort (needs max_groups entries), ensure it's large enough
         descs.emplace_back(std::max(n_tokens * top_k, max_groups), ov::element::i32);
-        // 6: num_groups — i32, 1
+        // 6: num_groups - i32, 1
         descs.emplace_back(static_cast<size_t>(1), ov::element::i32);
 
         return descs;

@@ -32,7 +32,7 @@ KERNEL(bgm_sort)(
 
     int max_groups = n_all_experts * top_k;
 
-    // Phase 1 (group_sizes scratch): histogram + compact pass — superseded below; kept
+    // Phase 1 (group_sizes scratch): histogram + compact pass - superseded below; kept
     // for behavioural parity. TODO: drop and run only the clean Pass 1-3.
     for (int i = 0; i < max_groups; i++) {
         group_sizes[i] = 0;
@@ -101,7 +101,7 @@ KERNEL(bgm_sort)(
     total_groups = g;
     num_groups[0] = total_groups;
 
-    // Pass 3: scatter — per-group scan over tokens. O(total_groups * n_tokens), tiny in practice.
+    // Pass 3: scatter - per-group scan over tokens. O(total_groups * n_tokens), tiny in practice.
     for (int gi = 0; gi < total_groups; gi++) {
         int target_slot = group_slot_ids[gi];
         int target_expert = group_expert_ids[gi];

@@ -94,7 +94,7 @@ JitConstants MoE3GemmMicroGenerator::get_jit_constants(const kernel_impl_params&
 
     GPU_DEBUG_TRACE_DETAIL << "\t m_scale_idx: " << m_scale_idx << std::endl;
     GPU_DEBUG_TRACE_DETAIL << "\t m_scale_idx.get_shape(): " << scale_layout.to_short_string() << std::endl;
-    // Derive num_groups from K/group_size — synthetic and real IRs emit different scale layouts.
+    // Derive num_groups from K/group_size - synthetic and real IRs emit different scale layouts.
     {
         auto desc = params.typed_desc<moe_3gemm_fused_compressed>();
         size_t K = (m_type == MoE3GemmMicroKernelType::MLP_DOWN) ? desc->_config.inter_size : desc->_config.hidden_size;

@@ -96,7 +96,7 @@ inline MAKE_VECTOR_TYPE(AccT, SliceSize) FUNC(Name)(const __global InputT* input
     DECLARE_PACKED_ACCUMULATE_EARGS(Name, AccT, InputT, SliceSize, SlicePitch, Items, Workers, AccOp, , )
 
 // ==============================================================================================================================
-// Dynamic variants — Items is a function parameter (uint) instead of a compile-time constant.
+// Dynamic variants - Items is a function parameter (uint) instead of a compile-time constant.
 // Used in IS_DYNAMIC mode where spatial dimensions are not known at OpenCL compile time.
 // ==============================================================================================================================
 

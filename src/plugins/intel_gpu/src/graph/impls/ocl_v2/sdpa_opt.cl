@@ -360,7 +360,7 @@ KERNEL(sdpa_opt)(
                     acc[seq_idx] = sub_group_reduce_add(acc[seq_idx]);
                     qk_local[seq_idx * SEQ_LEN_PARTITION_SIZE + seq_len] = acc[seq_idx];
                 }
-#else  // !(IS_KV_COMPRESSED && IS_INT4_COMPRESSED) — original INT8 path
+#else  // !(IS_KV_COMPRESSED && IS_INT4_COMPRESSED) - original INT8 path
                 uint head_idx_index = 0;
                 #define KEY_BLOCK_SIZE 8
                 for (; head_idx_index + (KEY_BLOCK_SIZE * SUBGROUP_SIZE) <= K_HEAD_SIZE; head_idx_index += SUBGROUP_SIZE * KEY_BLOCK_SIZE) {

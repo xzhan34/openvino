@@ -234,11 +234,11 @@ KERNEL(micro_sdpa)(OPTIONAL_SHAPE_INFO_ARG
         #if IS_INT4_KV_CACHE
         // INT4 K BY_CHANNEL Layout::N: ldk = column stride in u4 elements.
         // ADJUSTED_PAGED_ATTENTION_BLOCK_SIZE is in bytes (packed_block + scale = 12).
-        // Multiply by 2 for u4: 12 * 2 = 24 u4 elements → 12 byte stride.
+        // Multiply by 2 for u4: 12 * 2 = 24 u4 elements -> 12 byte stride.
         uint ldk = ADJUSTED_PAGED_ATTENTION_BLOCK_SIZE * 2;
         // INT4 V per-token Layout::N: ldv = row stride in u4 elements.
         // ADJUSTED_V_HEAD_SIZE is in bytes (packed_head + scale = 68).
-        // Multiply by 2 for u4: 68 * 2 = 136 u4 elements → 68 byte stride.
+        // Multiply by 2 for u4: 68 * 2 = 136 u4 elements -> 68 byte stride.
         uint ldv = ADJUSTED_V_HEAD_SIZE * 2;
         #else
         uint ldk = ADJUSTED_PAGED_ATTENTION_BLOCK_SIZE;

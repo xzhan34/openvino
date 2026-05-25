@@ -19,7 +19,7 @@
 
 #define UG(suffix) CAT(CAT(ugemm_, DECORATOR), suffix)
 
-// Aliases — DECLARE_2D_TILE doesn't expand nested CAT reliably across OCL preprocessors.
+// Aliases - DECLARE_2D_TILE doesn't expand nested CAT reliably across OCL preprocessors.
 #define UGEMM_SG_TILE_M      UG(_sg_tile_m)
 #define UGEMM_SG_TILE_N      UG(_sg_tile_n)
 #define UGEMM_WG_TILE_M      UG(_wg_tile_m)

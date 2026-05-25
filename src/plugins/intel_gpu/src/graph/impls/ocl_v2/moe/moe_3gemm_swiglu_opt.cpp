@@ -2055,7 +2055,7 @@ public:
     }
 
     // Build (and cache) three grouped dnnl::matmul primitives for gate/up/down.
-    // Cache key is total_tokens only — the per-request max_tokens_per_expert
+    // Cache key is total_tokens only - the per-request max_tokens_per_expert
     // dispatch hint is passed as a runtime argument (DNNL_ARG_HINT_MAX_GROUP_SIZE)
     // at execute() time, so no recompilation is needed when it changes.
     grouped_onednn_kernel& get_grouped_kernel(int total_tokens, typed_primitive_inst<moe_3gemm_fused_compressed>& instance) {
@@ -2303,7 +2303,7 @@ public:
         expert_mask_cpu expert_mask;
         get_expert_mask_from_gpu(config, batch_mem_ptr, stream, expert_mask);
 
-        // Flat list of source token indices per expert – input for prefill_gather
+        // Flat list of source token indices per expert - input for prefill_gather
         std::vector<int32_t> tokens_per_expert_cpu(static_cast<size_t>(token_num) * max_topk, -1);
         // Compact per-activated-expert metadata reused by scatter_reduce
         std::vector<int32_t> tokens_lens_per_expert_cpu(num_total_experts, 0);
@@ -2367,7 +2367,7 @@ public:
             ->copy_from(stream, grouped_offsets_cpu.data(), 0, 0, grouped_offsets_cpu.size() * sizeof(int32_t), true);
 
         // ----------------------------------------------------------------
-        // Step 2: GPU gather – reorder input tokens sorted by expert
+        // Step 2: GPU gather - reorder input tokens sorted by expert
         // ----------------------------------------------------------------
         {
             auto hidden_size = _hidden_size;
@@ -2386,7 +2386,7 @@ public:
         }
 
         // ----------------------------------------------------------------
-        // Steps 3-5: OneDNN grouped GEMM – gate, up, SiLU, down
+        // Steps 3-5: OneDNN grouped GEMM - gate, up, SiLU, down
         // ----------------------------------------------------------------
         // SAFETY CHECK: Verify grouped_offsets buffer exists before accessing
         if (intermediates_memories.size() <= MOE_INTERNAL_BUFFER_GROUPED_OFFSETS) {
@@ -2479,7 +2479,7 @@ public:
         }
 
         // ----------------------------------------------------------------
-        // Step 6: scatter_reduce – weighted accumulate into output
+        // Step 6: scatter_reduce - weighted accumulate into output
         // ----------------------------------------------------------------
         {
             auto [local_threads_count, batches_per_thread, _unused] =
@@ -2597,7 +2597,7 @@ public:
             // Shared expert's down_proj uses sum post-op (output += result), so the
             // scatter_reduce must have written the MoE output first.  Both are on the
             // same in-order OCL queue, so submission order guarantees execution order.
-            // No explicit wait() is needed — the in-order queue serializes all GPU work,
+            // No explicit wait() is needed - the in-order queue serializes all GPU work,
             // and any subsequent primitive on the same queue will see the completed output.
             if (use_grouped_gemm_prefill && ret_env) {
                 // ensure grouped GEMM fully completes before executing shared expert, which relies on its output being ready;

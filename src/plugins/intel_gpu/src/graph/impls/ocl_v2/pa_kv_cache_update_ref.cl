@@ -55,7 +55,7 @@ inline void FUNC(quantize_and_save_per_token)(__global const INPUT0_TYPE* in_dat
         }
         // Adjacent packing: packed byte n = pack(head[2n], head[2n+1])
         // Each packed group of 16 bytes covers 2 input groups (32 head elements)
-        // Use out_data_pitch: key (pitch=block_size) → head-major, value (pitch=1) → token-major
+        // Use out_data_pitch: key (pitch=block_size) -> head-major, value (pitch=1) -> token-major
         unroll_for (uint pp = 0; pp < num_groups / U4_ELEMS_PER_BYTE; pp++) {
             uint src_lane = (sglid % 8) * 2;
             char lo_even = intel_sub_group_shuffle(quant_data[2 * pp], src_lane);
@@ -67,7 +67,7 @@ inline void FUNC(quantize_and_save_per_token)(__global const INPUT0_TYPE* in_dat
             res_vec.s1 = (sglid < 8) ? hi_even : hi_odd;
             out_data[out_data_offset + (pp * SUBGROUP_SIZE + sglid) * out_data_pitch] = cvt_int8x2_to_uint4x2(res_vec);
         }
-        // Handle remaining group when num_groups is odd (e.g., head_size=80 → 5 groups)
+        // Handle remaining group when num_groups is odd (e.g., head_size=80 -> 5 groups)
         if (num_groups % U4_ELEMS_PER_BYTE != 0) {
             uint last_grp = num_groups - 1;
             uint pp = num_groups / U4_ELEMS_PER_BYTE;

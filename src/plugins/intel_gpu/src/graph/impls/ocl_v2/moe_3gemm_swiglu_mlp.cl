@@ -610,7 +610,7 @@ __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE))) KERNEL(mlp_gate_up)(
             }
         }
     }
-    // routing_weights[MAX_TOPK] is consumed by the next kernel (mlp_down) — no barrier needed here.
+    // routing_weights[MAX_TOPK] is consumed by the next kernel (mlp_down) - no barrier needed here.
 #    endif
 
 #    if WEIGHT_COMPRESSEION_DT == 0

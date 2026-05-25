@@ -175,7 +175,7 @@ JitConstants GatherMatmulMicroGenerator::get_jit_constants(const kernel_impl_par
         }
     }
 
-    // GatherMatmul-specific constants — use LayoutJitter for dynamic-shape-safe access
+    // GatherMatmul-specific constants - use LayoutJitter for dynamic-shape-safe access
     // INPUT0=activations rank3, INPUT2=indices rank2.
     jit.make("N_TOKENS", "INPUT0_FEATURE_NUM");
     jit.make("N_ACTIVATED_EXPERTS", "INPUT0_BATCH_NUM");
@@ -223,7 +223,7 @@ void GatherMatmulMicroGenerator::init_microkernels(const kernel_impl_params& par
     hw_info.gmdid = device_info.ip_version;
     hw_info.systolicAvailable = device_info.supports_immad;
 
-    // B (weights): [n_all_experts, N, K] — N=ofm, K=ifm
+    // B (weights): [n_all_experts, N, K] - N=ofm, K=ifm
     const auto& weight_shape = params.get_input_layout(gather_matmul::BGMInputIdx::WEIGHT).get_shape();
     size_t m = weight_shape[1];      // N (output features)
     size_t n = is_prefill ? 32 : 8;  // token count hint

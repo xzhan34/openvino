@@ -66,7 +66,7 @@ KERNEL(swiglu_gpu_opt)(
     #endif
 #else
     #if GLU_STRIDE == 2
-        // alternating mode: pair is at positions y, y+1 — gate is the odd neighbor
+        // alternating mode: pair is at positions y, y+1 - gate is the odd neighbor
         ACCUMULATOR_TYPE gate = input[y + 1];
     #else
         ACCUMULATOR_TYPE gate = input[y + GLU_STRIDE];

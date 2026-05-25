@@ -148,7 +148,7 @@ KERNEL(dynamic_quantize_gpu_kv_cache)(
 #endif
     }
 
-#else  // !IS_INT4_COMPRESSED — original INT8 path
+#else  // !IS_INT4_COMPRESSED - original INT8 path
 
 #if ASYMMETRIC_QUANTIZATION
     min_value = work_group_reduce_min(min_value);

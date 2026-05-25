@@ -86,7 +86,7 @@
 // that uses this CL file (fsv16).
 // JIT-defined constants are automatically #undef'd between batch-compiled
 // kernels, preventing stale macro leakage across compilation units.
-// Do NOT add a #ifndef fallback here — a CL-side #define escapes the
+// Do NOT add a #ifndef fallback here - a CL-side #define escapes the
 // JIT #undef system and leaks into subsequent batch-compiled kernels.
 
 // OUTPUT_PAD_IN_ITEMS is used in #if preprocessor directives.

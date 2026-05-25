@@ -53,7 +53,7 @@ Arguments GatherMatmulSortGenerator::get_arguments_desc(const kernel_impl_params
 DispatchDataFunc GatherMatmulSortGenerator::get_dispatch_data_func() const {
     return DispatchDataFunc{[](const RuntimeParams& params, KernelData& kd, ImplRuntimeParams* rt_params) {
         auto& wgs = kd.params.workGroups;
-        // Single workgroup — all work done sequentially
+        // Single workgroup - all work done sequentially
         wgs.global = {1, 1, 1};
         wgs.local = {1, 1, 1};
     }};

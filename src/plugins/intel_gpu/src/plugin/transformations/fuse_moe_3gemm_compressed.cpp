@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
 #include "openvino/core/graph_util.hpp"
 #include "openvino/core/node.hpp"
 #include "openvino/core/rt_info.hpp"
@@ -35,9 +34,11 @@
 #include "openvino/pass/pattern/op/pattern.hpp"
 #include "openvino/pass/pattern/op/wrap_type.hpp"
 #include "openvino/util/pp.hpp"
+#include "ov_ops/moe_3gemm_fused_compressed.hpp"
 #include "ov_ops/moe_compressed.hpp"
 
 namespace ov::intel_gpu {
+
 FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
     using namespace ov::pass::pattern;
     using namespace ov::pass;
@@ -228,7 +229,7 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
             args[9] = folded;
         }
 
-        std::shared_ptr<ov::Node> moe_router_fused = std::make_shared<ov::intel_gpu::op::MOE3GemmFusedCompressed>(args, config);
+        std::shared_ptr<ov::Node> moe_router_fused = std::make_shared<ov::op::internal::MOE3GemmFusedCompressed>(args, config);
         ov::copy_runtime_info(moe_compressed, moe_router_fused);
 
         // If MOECompressed's first input was the original (un-reshaped) hidden state

@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "ov_ops/moe_compressed.hpp"
-#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
-#include "ov_ops/moe_compressed.hpp"
+#include "ov_ops/moe_3gemm_fused_compressed.hpp"
 
-namespace ov::intel_gpu::op {
+namespace ov::op::internal {
 
-MOE3GemmFusedCompressed::MOE3GemmFusedCompressed(const OutputVector& args, const ov::op::internal::MOECompressed::Config config) : ov::op::internal::MOECompressed(args, config, SkipValidateTag{}) {
+MOE3GemmFusedCompressed::MOE3GemmFusedCompressed(const OutputVector& args, const MOECompressed::Config& config)
+    : MOECompressed(args, config, SkipValidateTag{}) {
     constructor_validate_and_infer_types();
 }
 
@@ -17,7 +16,7 @@ void MOE3GemmFusedCompressed::validate_and_infer_types() {
                                  : m_config.routing_type == MOECompressed::RoutingType::SIGMOID_BIAS ? 13
                                  : 11;
     OPENVINO_ASSERT(get_input_size() == expected_inputs,
-                    "MOECompressed: expected ",
+                    "MOE3GemmFusedCompressed: expected ",
                     expected_inputs,
                     " inputs for routing type ",
                     m_config.routing_type,
@@ -25,23 +24,18 @@ void MOE3GemmFusedCompressed::validate_and_infer_types() {
                     get_input_size());
 
     if (m_config.routing_type == MOECompressed::RoutingType::SIGMOID_BIAS) {
-        // Input 12 is routing_eps — must be a scalar
         OPENVINO_ASSERT(ov::shape_size(get_input_partial_shape(12).to_shape()) == 1,
                         "MOE3GemmFusedCompressed: routing_eps (input 12) must be scalar, got shape ",
                         get_input_partial_shape(12));
     }
 
-    // MOE3GemmFusedCompressed has a different input layout than MOECompressed
-    // (no topk_indices, routing fused at idx=1, weights start at idx=2).
-    // Skip parent's strict weight validation which assumes MOECompressed layout.
-    auto output_type = m_config.out_type == ov::element::dynamic ? get_input_element_type(0) : m_config.out_type;
+    const auto output_type = m_config.out_type == ov::element::dynamic ? get_input_element_type(0) : m_config.out_type;
     set_output_type(0, output_type, get_input_partial_shape(0));
 }
 
-std::shared_ptr<ov::Node> MOE3GemmFusedCompressed::clone_with_new_inputs(const ov::OutputVector& new_args) const {
+std::shared_ptr<ov::Node> MOE3GemmFusedCompressed::clone_with_new_inputs(const OutputVector& new_args) const {
     check_new_args_count(this, new_args);
-
     return std::make_shared<MOE3GemmFusedCompressed>(new_args, get_config());
 }
 
-}  // namespace ov::intel_gpu::op
+}  // namespace ov::op::internal
