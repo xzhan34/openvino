@@ -88,23 +88,27 @@ jobs:
           done
 
       # ── Compiler cache ─────────────────────────────────────────────────
+      # PRs only restore from master cache to avoid blowing the 10 GB repo
+      # cache budget.  Only push (master merge) and schedule saves new caches.
       - name: Setup ccache (Linux)
         if: runner.os == 'Linux'
         uses: hendrikmuhs/ccache-action@v1
         with:
-          key: ov-${{ matrix.artifact_suffix }}-${{ github.ref_name }}
+          key: ov-${{ matrix.artifact_suffix }}-${{ github.run_id }}
           restore-keys: |
             ov-${{ matrix.artifact_suffix }}
           max-size: 2G
+          save: ${{ github.event_name != 'pull_request' }}
 
       - name: Setup sccache (Windows)
         if: runner.os == 'Windows'
         uses: hendrikmuhs/ccache-action@v1
         with:
-          key: ov-${{ matrix.artifact_suffix }}-${{ github.ref_name }}
+          key: ov-${{ matrix.artifact_suffix }}-${{ github.run_id }}
           restore-keys: |
             ov-${{ matrix.artifact_suffix }}
           max-size: 2G
+          save: ${{ github.event_name != 'pull_request' }}
           variant: sccache
 
       # ── Configure & Build (Linux) ───────────────────────────────────────
