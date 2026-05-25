@@ -31,6 +31,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  actions: write
 
 env:
   CMAKE_BUILD_TYPE: Release
@@ -332,3 +333,39 @@ jobs:
             install/manifest.json:application/json
           oras tag "${REPO}:${OV_TAG}" "latest-${{ matrix.artifact_suffix }}"
           echo "Pushed ${REPO}:${OV_TAG}"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Job 2: Cleanup old compiler caches — keep only the latest per prefix
+  # ════════════════════════════════════════════════════════════════════════
+  cleanup-caches:
+    name: Cleanup old compiler caches
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    steps:
+      - name: Delete old cache entries (keep only latest per prefix)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          # For each cache key prefix, keep only the newest entry and delete the rest.
+          # This prevents accumulation of multi-GB sccache/ccache entries.
+          for prefix in "sccache-ov-windows" "ccache-ov-ubuntu22" "ccache-ov-ubuntu24"; do
+            echo "=== Cleaning caches with prefix: $prefix ==="
+            # List caches sorted by creation time (newest first)
+            caches=$(gh api "/repos/${REPO}/actions/caches?key=${prefix}&sort=created_at&direction=desc&per_page=100" \
+              --jq '.actions_caches[].id')
+
+            # Skip the first (newest) entry, delete the rest
+            first=true
+            for cache_id in $caches; do
+              if $first; then
+                echo "  Keeping cache id=$cache_id (newest)"
+                first=false
+                continue
+              fi
+              echo "  Deleting cache id=$cache_id"
+              gh api --method DELETE "/repos/${REPO}/actions/caches/$cache_id" || true
+            done
+          done
