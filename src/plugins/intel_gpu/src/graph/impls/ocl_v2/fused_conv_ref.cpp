@@ -33,15 +33,7 @@ protected:
     }
 
     [[nodiscard]] Arguments get_arguments_desc(const RuntimeParams& params) const override {
-        Arguments args;
-
-        for (uint32_t i = 0; i < params.input_layouts.size(); i++) {
-            args.push_back({ArgumentDescriptor::Types::INPUT, i});
-        }
-
-        for (uint32_t i = 0; i < params.output_layouts.size(); i++) {
-            args.push_back({ArgumentDescriptor::Types::OUTPUT, i});
-        }
+        auto args = KernelGenerator::get_arguments_desc(params);
         // seq_len scalar
         args.push_back({ArgumentDescriptor::Types::SCALAR, 0});
 

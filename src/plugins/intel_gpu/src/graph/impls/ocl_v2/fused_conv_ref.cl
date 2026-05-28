@@ -15,7 +15,7 @@
 //
 // Dispatch: global = {batch, conv_dim, 1}, local = {1, WG_SIZE, 1}
 
-KERNEL(fused_conv_ref)(
+KERNEL(fused_conv_ref)(OPTIONAL_SHAPE_INFO_ARG
     __global INPUT0_TYPE* input,
     __global INPUT1_TYPE* conv_weight,
     __global INPUT2_TYPE* beam_idx,
@@ -31,24 +31,23 @@ KERNEL(fused_conv_ref)(
         return;
 
     // 1. Beam search reorder: read state from beam_idx[b] source batch
-    const int src_b = convert_int(beam_idx[b]);
+    const int src_b = convert_int(beam_idx[INPUT2_GET_INDEX(b, 0, 0, 0)]);
 
     // 2. Load state (KERNEL_SIZE values)
     float state[KERNEL_SIZE];
-    const int state_in_base = src_b * CONV_DIM * KERNEL_SIZE + ch * KERNEL_SIZE;
     for (int k = 0; k < KERNEL_SIZE; k++)
-        state[k] = convert_float(state_in[state_in_base + k]);
+        state[k] = convert_float(state_in[INPUT3_GET_INDEX(src_b, ch, k, 0)]);
 
     // 3. Load conv weight
     float w[KERNEL_SIZE];
-    const int w_base = ch * KERNEL_SIZE;
     for (int k = 0; k < KERNEL_SIZE; k++)
-        w[k] = convert_float(conv_weight[w_base + k]);
+        w[k] = convert_float(conv_weight[INPUT1_GET_INDEX(ch, k, 0, 0)]);
 
     // 4. For each sequence position: depthwise conv + SiLU
-    const int io_base = b * CONV_DIM * seq_len + ch * seq_len;
     for (int s = 0; s < seq_len; s++) {
-        float x_new = convert_float(input[io_base + s]);
+        const int input_idx = INPUT0_GET_INDEX(b, ch, s, 0);
+        const int output_idx = OUTPUT_GET_INDEX(b, ch, s, 0);
+        float x_new = convert_float(input[input_idx]);
 
         // Conv window = [state[1], state[2], ..., state[K-1], x_new]
         // This corresponds to concatenating state with input and applying valid conv
@@ -59,7 +58,7 @@ KERNEL(fused_conv_ref)(
 
         // SiLU activation: x * sigmoid(x)
         float sig = native_recip(1.0f + native_exp(-acc));
-        output[io_base + s] = TO_OUTPUT_TYPE(acc * sig);
+        output[output_idx] = TO_OUTPUT_TYPE(acc * sig);
 
         // Shift state left, append new input
         for (int k = 0; k < KERNEL_SIZE - 1; k++)
@@ -68,7 +67,6 @@ KERNEL(fused_conv_ref)(
     }
 
     // 5. Write back updated state
-    const int state_out_base = b * CONV_DIM * KERNEL_SIZE + ch * KERNEL_SIZE;
     for (int k = 0; k < KERNEL_SIZE; k++)
-        state_out[state_out_base + k] = TO_OUTPUT1_TYPE(state[k]);
+        state_out[OUTPUT1_GET_INDEX(b, ch, k, 0)] = TO_OUTPUT1_TYPE(state[k]);
 }
