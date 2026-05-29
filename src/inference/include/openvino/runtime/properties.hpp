@@ -635,6 +635,64 @@ static constexpr Property<element::Type, PropertyMutability::RW> kv_cache_precis
  */
 static constexpr Property<float, PropertyMutability::RW> activations_scale_factor{"ACTIVATIONS_SCALE_FACTOR"};
 
+/**
+ * @brief Enum to define the attention kernel implementation mode
+ * @ingroup ov_runtime_cpp_prop_api
+ */
+enum class AttnKernelMode {
+    AUTO = 0,   //!< Let the device select the attention kernel implementation automatically
+    PA_CM = 1,  //!< Explicitly request the Intel CM kernel/JIT paged attention implementation; unrelated to Apple Metal
+};
+
+/** @cond INTERNAL */
+inline std::ostream& operator<<(std::ostream& os, const AttnKernelMode& mode) {
+    switch (mode) {
+    case AttnKernelMode::AUTO:
+        return os << "AUTO";
+    case AttnKernelMode::PA_CM:
+        return os << "PA_CM";
+    default:
+        OPENVINO_THROW("Unsupported attn_kernel_mode value");
+    }
+}
+
+inline std::istream& operator>>(std::istream& is, AttnKernelMode& mode) {
+    std::string str;
+    is >> str;
+    if (str == "AUTO") {
+        mode = AttnKernelMode::AUTO;
+    } else if (str == "PA_CM") {
+        mode = AttnKernelMode::PA_CM;
+    } else {
+        OPENVINO_THROW("Unsupported attn_kernel_mode: ", str);
+    }
+    return is;
+}
+/** @endcond */
+
+/**
+ * @brief Property to select a specific attention kernel implementation.
+ * @ingroup ov_runtime_cpp_prop_api
+ *
+ * Although exposed under the ``ov::hint`` namespace for consistency with related properties,
+ * this property is NOT a soft hint. Its semantics are:
+ *
+ * - ``AttnKernelMode::AUTO`` (default): the device picks the attention kernel automatically
+ *   based on the model, the hardware, and internal heuristics. This is the normal behavior
+ *   and the only mode that may silently fall back between kernels.
+ * - ``AttnKernelMode::PA_CM``: explicitly require the CM (C for Metal) paged attention
+ *   kernel on Intel GPU. This is treated as a hard requirement. If the model, the GPU
+ *   architecture, the input layout, or the data types are not compatible with the CM
+ *   kernel, ``compile_model()`` will throw rather than silently fall back to another
+ *   implementation. Use this mode for benchmarking and controlled validation of the CM
+ *   paged attention path. If silent fallback is acceptable, prefer ``AUTO``.
+ *
+ * Compiled-blob caching: this property participates in the GPU plugin's compiled-blob
+ * cache key. Models compiled with ``AUTO`` and ``PA_CM`` produce distinct cache entries
+ * and are never reused across modes.
+ */
+static constexpr Property<AttnKernelMode, PropertyMutability::RW> attn_kernel_mode{"ATTN_KERNEL_MODE"};
+
 /** @brief  Hint for device to use model compiled blob.
  * @ingroup ov_runtime_cpp_prop_api
  *

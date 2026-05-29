@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <limits>
+#include <sstream>
 
 #include "common_test_utils/test_assertions.hpp"
 #include "openvino/runtime/properties.hpp"
@@ -303,6 +304,63 @@ TEST(PropertiesValidation, BoolPropertyAcceptsIntegerValues) {
     OV_ASSERT_NO_THROW(std::ignore = ov::enable_mmap(1));
     OV_ASSERT_NO_THROW(std::ignore = ov::enable_mmap(2));
     OV_ASSERT_NO_THROW(std::ignore = ov::enable_mmap(0));
+}
+
+// --- ov::hint::attn_kernel_mode (AttnKernelMode enum property) ---
+
+TEST(AttnKernelMode, PropertyName) {
+    EXPECT_STREQ(ov::hint::attn_kernel_mode.name(), "ATTN_KERNEL_MODE");
+}
+
+TEST(AttnKernelMode, OStreamSerialization) {
+    std::ostringstream oss_auto;
+    oss_auto << ov::hint::AttnKernelMode::AUTO;
+    EXPECT_EQ(oss_auto.str(), "AUTO");
+
+    std::ostringstream oss_pa_cm;
+    oss_pa_cm << ov::hint::AttnKernelMode::PA_CM;
+    EXPECT_EQ(oss_pa_cm.str(), "PA_CM");
+}
+
+TEST(AttnKernelMode, OStreamRejectsUnknownValue) {
+    auto invalid = static_cast<ov::hint::AttnKernelMode>(999);
+    std::ostringstream oss;
+    OV_EXPECT_THROW(oss << invalid, ov::Exception, testing::HasSubstr("Unsupported attn_kernel_mode"));
+}
+
+TEST(AttnKernelMode, IStreamDeserialization) {
+    {
+        std::istringstream iss("AUTO");
+        ov::hint::AttnKernelMode mode{};
+        iss >> mode;
+        EXPECT_EQ(mode, ov::hint::AttnKernelMode::AUTO);
+    }
+    {
+        std::istringstream iss("PA_CM");
+        ov::hint::AttnKernelMode mode{};
+        iss >> mode;
+        EXPECT_EQ(mode, ov::hint::AttnKernelMode::PA_CM);
+    }
+}
+
+TEST(AttnKernelMode, IStreamRejectsUnknownString) {
+    std::istringstream iss("UNKNOWN_MODE");
+    ov::hint::AttnKernelMode mode{};
+    OV_EXPECT_THROW(iss >> mode, ov::Exception, testing::HasSubstr("Unsupported attn_kernel_mode"));
+}
+
+TEST(AttnKernelMode, FactoryFromEnumRoundtripsOVAny) {
+    auto kv = ov::hint::attn_kernel_mode(ov::hint::AttnKernelMode::PA_CM);
+    EXPECT_EQ(kv.first, std::string{"ATTN_KERNEL_MODE"});
+    EXPECT_EQ(kv.second.as<ov::hint::AttnKernelMode>(), ov::hint::AttnKernelMode::PA_CM);
+}
+
+TEST(AttnKernelMode, OVAnyToStringSerializesEnumName) {
+    ov::Any any = ov::hint::AttnKernelMode::PA_CM;
+    EXPECT_EQ(any.as<std::string>(), "PA_CM");
+
+    ov::Any any_auto = ov::hint::AttnKernelMode::AUTO;
+    EXPECT_EQ(any_auto.as<std::string>(), "AUTO");
 }
 
 }  // namespace ov::test

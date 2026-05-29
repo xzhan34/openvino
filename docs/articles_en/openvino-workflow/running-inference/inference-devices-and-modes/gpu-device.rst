@@ -392,6 +392,34 @@ GPU Context and Memory Sharing via RemoteTensor API
 
 For information on this subject, see the :doc:`RemoteTensor API of GPU Plugin <gpu-device/remote-tensor-api-gpu-plugin>`.
 
+Attention Kernel Mode Selection
++++++++++++++++++++++++++++++++++++++++
+
+The property ``ov::hint::attn_kernel_mode`` controls which attention kernel implementation
+the GPU plugin uses for paged-attention layers. Despite living under the ``ov::hint``
+namespace, this is **not a soft hint** — ``PA_CM`` is a hard requirement with fail-fast
+semantics.
+
+- ``ov::hint::AttnKernelMode::AUTO`` (default): the plugin selects the attention kernel
+  automatically based on model, hardware, and internal heuristics. This is the only mode
+  that may silently fall back between kernel implementations.
+- ``ov::hint::AttnKernelMode::PA_CM``: explicitly require the CM (C for Metal) paged
+  attention kernel. ``compile_model()`` will throw with an actionable error message when
+  any of the following constraints is violated: non-systolic GPU architecture, missing
+  immad / CM JIT support, ``k_head_size`` and ``v_head_size`` both not divisible by 16,
+  Q/K/V/output not in ``bfyx`` layout, unsupported Q/K/V data types (``f16`` only) or
+  unsupported KV-cache data types (``f16`` or ``i8``). Set ``AUTO`` if silent fallback is
+  acceptable.
+
+Behavioral notes:
+
+- ``PA_CM`` disables the XAttention bypass heuristic so the full CM xattn path is
+  exercised end-to-end. This is intentional for benchmarking and controlled validation;
+  ``AUTO`` retains the original threshold / q_len bypass behavior.
+- ``ov::hint::attn_kernel_mode`` participates in the GPU compiled-blob cache key. Models
+  compiled with ``AUTO`` and ``PA_CM`` produce distinct cache entries and are never reused
+  across modes.
+
 Supported Properties
 #######################################
 
@@ -415,6 +443,7 @@ All parameters must be set before calling ``ov::Core::compile_model()`` in order
 - ``ov::num_streams``
 - ``ov::weights_path``
 - ``ov::hint::activations_scale_factor``
+- ``ov::hint::attn_kernel_mode``
 - ``ov::hint::dynamic_quantization_group_size``
 - ``ov::hint::enable_cpu_pinning``
 - ``ov::hint::enable_cpu_reservation``

@@ -53,6 +53,12 @@ struct PagedAttentionOpt : public ImplementationManager {
             GPU_DEBUG_TRACE_DETAIL << "validate_impl() - false because XAttention is not supported with ocl. " << std::endl;
             return false;
         }
+        // When attn_kernel_mode == PA_CM is requested via YAML/compile_model, bow out of
+        // OCL so the CM paged attention implementation is selected instead.
+        if (desc->use_cm_kernel) {
+            GPU_DEBUG_TRACE_DETAIL << "validate_impl() - false because attn_kernel_mode=PA_CM requested. " << std::endl;
+            return false;
+        }
 
         const auto& q_layout = node.get_input_layout(0);
         const auto& k_layout = node.get_input_layout(1);

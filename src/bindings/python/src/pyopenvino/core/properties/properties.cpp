@@ -93,6 +93,10 @@ void regmodule_properties(py::module m) {
         .value("PERFORMANCE", ov::hint::ExecutionMode::PERFORMANCE)
         .value("ACCURACY", ov::hint::ExecutionMode::ACCURACY);
 
+    py::enum_<ov::hint::AttnKernelMode>(m_hint, "AttnKernelMode", py::arithmetic())
+        .value("AUTO", ov::hint::AttnKernelMode::AUTO)
+        .value("PA_CM", ov::hint::AttnKernelMode::PA_CM);
+
     // Submodule hint - properties
     wrap_property_RW(m_hint, ov::hint::inference_precision, "inference_precision");
     wrap_property_RW(m_hint, ov::hint::model_priority, "model_priority");
@@ -109,6 +113,7 @@ void regmodule_properties(py::module m) {
     wrap_property_RW(m_hint, ov::hint::dynamic_quantization_group_size, "dynamic_quantization_group_size");
     wrap_property_RW(m_hint, ov::hint::kv_cache_precision, "kv_cache_precision");
     wrap_property_RW(m_hint, ov::hint::activations_scale_factor, "activations_scale_factor");
+    wrap_property_RW(m_hint, ov::hint::attn_kernel_mode, "attn_kernel_mode");
     wrap_property_RW(m_hint, ov::hint::compiled_blob, "compiled_blob");
 
     // Submodule intel_cpu

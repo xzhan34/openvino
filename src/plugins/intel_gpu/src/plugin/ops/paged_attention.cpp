@@ -3,6 +3,7 @@
 //
 
 #include "openvino/op/paged_attention.hpp"
+#include "openvino/runtime/properties.hpp"
 
 #include "intel_gpu/plugin/common_utils.hpp"
 #include "intel_gpu/plugin/program_builder.hpp"
@@ -126,6 +127,7 @@ static void CreatePagedAttentionExtensionOp(ProgramBuilder& p, const std::shared
         prim.has_qq_bias = true;
     }
     prim.is_key_by_channel = p.get_config().get_key_cache_quant_mode() == ov::internal::CacheQuantMode::BY_CHANNEL;
+    prim.use_cm_kernel = p.get_config().get_attn_kernel_mode() == ov::hint::AttnKernelMode::PA_CM;
     prim.num_outputs = 1;
 
     if (op->get_output_size() > 1) {

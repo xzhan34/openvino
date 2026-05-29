@@ -653,7 +653,8 @@ TEST_P(OVGetMetricPropsTest_CACHING_PROPERTIES, smoke_GetMetricAndPrintNoThrow) 
         ov::hint::execution_mode.name(),
         ov::hint::performance_mode.name(),
         ov::hint::dynamic_quantization_group_size.name(),
-        ov::hint::activations_scale_factor.name()
+        ov::hint::activations_scale_factor.name(),
+        ov::hint::attn_kernel_mode.name(),
     };
 
     OV_ASSERT_NO_THROW(caching_properties = ie.get_property(target_device, ov::internal::caching_properties));
@@ -673,6 +674,41 @@ TEST_P(OVGetMetricPropsTest_CACHING_PROPERTIES, smoke_GetMetricAndPrintNoThrow) 
 
 INSTANTIATE_TEST_SUITE_P(nightly_OVGetMetricPropsTest,
                          OVGetMetricPropsTest_CACHING_PROPERTIES,
+                         ::testing::Values("GPU"));
+
+// --- ov::hint::attn_kernel_mode --------------------------------------------------------
+//
+// Verifies that the GPU plugin advertises ATTN_KERNEL_MODE in supported_properties, that
+// the value can be round-tripped via Core::set_property / get_property, and that AUTO is
+// the default. PA_CM is a hard requirement at compile_model() time; full
+// fail-fast / success coverage of the CM kernel selection lives next to the
+// CM paged_attention implementation and requires a paged-attention model + a
+// systolic-array GPU, so this test only covers the property surface.
+using OVGetMetricPropsTest_ATTN_KERNEL_MODE = OVClassBaseTestP;
+TEST_P(OVGetMetricPropsTest_ATTN_KERNEL_MODE, smoke_AdvertisedAndRoundtrips) {
+    ov::Core ie = ov::test::utils::create_core();
+
+    OV_ASSERT_PROPERTY_SUPPORTED(ov::hint::attn_kernel_mode.name());
+
+    // Default is AUTO.
+    ov::hint::AttnKernelMode value{};
+    OV_ASSERT_NO_THROW(value = ie.get_property(target_device, ov::hint::attn_kernel_mode));
+    ASSERT_EQ(value, ov::hint::AttnKernelMode::AUTO);
+
+    // Set/get roundtrip.
+    OV_ASSERT_NO_THROW(ie.set_property(target_device,
+                                       ov::hint::attn_kernel_mode(ov::hint::AttnKernelMode::PA_CM)));
+    OV_ASSERT_NO_THROW(value = ie.get_property(target_device, ov::hint::attn_kernel_mode));
+    ASSERT_EQ(value, ov::hint::AttnKernelMode::PA_CM);
+
+    OV_ASSERT_NO_THROW(ie.set_property(target_device,
+                                       ov::hint::attn_kernel_mode(ov::hint::AttnKernelMode::AUTO)));
+    OV_ASSERT_NO_THROW(value = ie.get_property(target_device, ov::hint::attn_kernel_mode));
+    ASSERT_EQ(value, ov::hint::AttnKernelMode::AUTO);
+}
+
+INSTANTIATE_TEST_SUITE_P(nightly_OVGetMetricPropsTest,
+                         OVGetMetricPropsTest_ATTN_KERNEL_MODE,
                          ::testing::Values("GPU"));
 
 // GetConfig / SetConfig for specific device

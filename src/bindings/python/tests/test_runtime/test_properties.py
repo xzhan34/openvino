@@ -106,6 +106,13 @@ def test_properties_rw_base():
             ),
         ),
         (
+            hints.AttnKernelMode,
+            (
+                (hints.AttnKernelMode.AUTO, "AttnKernelMode.AUTO", 0),
+                (hints.AttnKernelMode.PA_CM, "AttnKernelMode.PA_CM", 1),
+            ),
+        ),
+        (
             device.Type,
             (
                 (device.Type.INTEGRATED, "Type.INTEGRATED", 0),
@@ -347,6 +354,14 @@ def test_properties_ro(ov_property_ro, expected_value):
             hints.execution_mode,
             "EXECUTION_MODE_HINT",
             ((hints.ExecutionMode.PERFORMANCE, hints.ExecutionMode.PERFORMANCE),),
+        ),
+        (
+            hints.attn_kernel_mode,
+            "ATTN_KERNEL_MODE",
+            (
+                (hints.AttnKernelMode.AUTO, hints.AttnKernelMode.AUTO),
+                (hints.AttnKernelMode.PA_CM, hints.AttnKernelMode.PA_CM),
+            ),
         ),
         (
             hints.num_requests,

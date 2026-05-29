@@ -246,3 +246,26 @@ TEST(execution_config, kv_cache_4bit_by_token_throws) {
 
     ASSERT_ANY_THROW(config.finalize(ctx.get(), model.get()));
 }
+
+TEST(execution_config, attn_kernel_mode_default_is_auto) {
+    auto& engine = get_test_engine();
+    auto ctx = std::make_shared<RemoteContextImpl>("GPU", std::vector<cldnn::device::ptr>{engine.get_device()});
+    auto model = make_pa_matmul_model(ov::element::f32);
+
+    ExecutionConfig config;
+    config.finalize(ctx.get(), model.get());
+
+    ASSERT_EQ(config.get_attn_kernel_mode(), ov::hint::AttnKernelMode::AUTO);
+}
+
+TEST(execution_config, attn_kernel_mode_user_override_pa_cm) {
+    auto& engine = get_test_engine();
+    auto ctx = std::make_shared<RemoteContextImpl>("GPU", std::vector<cldnn::device::ptr>{engine.get_device()});
+    auto model = make_pa_matmul_model(ov::element::f32);
+
+    ExecutionConfig config;
+    config.set_user_property(ov::hint::attn_kernel_mode(ov::hint::AttnKernelMode::PA_CM));
+    config.finalize(ctx.get(), model.get());
+
+    ASSERT_EQ(config.get_attn_kernel_mode(), ov::hint::AttnKernelMode::PA_CM);
+}

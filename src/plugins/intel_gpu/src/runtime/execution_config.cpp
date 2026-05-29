@@ -173,6 +173,7 @@ void ExecutionConfig::apply_rt_info(const IRemoteContext* context, const ov::RTM
 
     apply_rt_info_property(ov::hint::dynamic_quantization_group_size, rt_info);
     apply_rt_info_property(ov::intel_gpu::hint::dynamic_quantization_group_size_max, rt_info);
+    apply_rt_info_property(ov::hint::attn_kernel_mode, rt_info);
 
     // WEIGHTS_PATH is used for the weightless cache mechanism which is used only as defined by
     // ov::util::is_weightless_enabled. Not setting WEIGHTS_PATH will result in not
