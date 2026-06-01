@@ -16,6 +16,7 @@
 #include "openvino/op/convert.hpp"
 #include "openvino/op/gated_delta_net.hpp"
 #include "openvino/op/gather.hpp"
+#include "openvino/op/linear_attn.hpp"
 #include "openvino/op/paged_gated_delta_net.hpp"
 #include "openvino/op/parameter.hpp"
 #include "openvino/op/reshape.hpp"
@@ -143,16 +144,16 @@ PagedGatedDeltaNetFusion::PagedGatedDeltaNetFusion(ov::pass::paged_attention::Pa
         const auto query_shape = std::make_shared<ov::op::v3::ShapeOf>(pm.at(query), ov::element::i64);
         const auto value_shape = std::make_shared<ov::op::v3::ShapeOf>(pm.at(value), ov::element::i64);
         const auto axis_0 = v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
-        const auto idx_q = v0::Constant::create(ov::element::i64, ov::Shape{3}, {0, 1, 2});
-        const auto idx_v = v0::Constant::create(ov::element::i64, ov::Shape{1}, {3});
+        const auto idx_q = v0::Constant::create(ov::element::i64, ov::Shape{2}, {0, 1});
+        const auto idx_v = v0::Constant::create(ov::element::i64, ov::Shape{2}, {2, 3});
         const auto q_dims = std::make_shared<ov::op::v8::Gather>(query_shape, idx_q, axis_0);
-        const auto v_dim = std::make_shared<ov::op::v8::Gather>(value_shape, idx_v, axis_0);
-        const auto out0_shape = std::make_shared<v0::Concat>(ov::OutputVector{q_dims, v_dim}, 0);
+        const auto v_dims = std::make_shared<ov::op::v8::Gather>(value_shape, idx_v, axis_0);
+        const auto out0_shape = std::make_shared<v0::Concat>(ov::OutputVector{q_dims, v_dims}, 0);
         const auto paged_gdn_out = std::make_shared<ov::op::v1::Reshape>(paged_gdn, out0_shape, false);
         paged_gdn_out->set_friendly_name(gdn_node->get_friendly_name());
 
         ov::copy_runtime_info(gdn_node,
-                              {paged_gdn, query_shape, value_shape, q_dims, v_dim, out0_shape, paged_gdn_out});
+                      {paged_gdn, query_shape, value_shape, q_dims, v_dims, out0_shape, paged_gdn_out});
 
         // Disconnect GDN state output consumers; cleanup is driven by ReadValue variable ids.
         for (const auto& state_consumer : state_consumers) {
@@ -171,6 +172,98 @@ PagedGatedDeltaNetFusion::PagedGatedDeltaNetFusion(ov::pass::paged_attention::Pa
 
     const auto matcher = std::make_shared<ov::pass::pattern::Matcher>(gdn, "PagedGatedDeltaNetFusion");
     register_matcher(matcher, callback);
+
+    auto linear_attention = wrap_type<ov::op::LinearAttention>();
+
+    ov::matcher_pass_callback linear_attention_callback = [OV_CAPTURE_CPY_AND_THIS, &pa_params, &var_ids_to_remove](
+                                                             ov::pass::pattern::Matcher& m) {
+        if (transformation_callback(m.get_match_root())) {
+            return false;
+        }
+
+        const auto linear_attention_node = ov::as_type_ptr<ov::op::LinearAttention>(m.get_match_root());
+        if (!linear_attention_node || !linear_attention_node->get_variable() || linear_attention_node->get_output_size() != 2) {
+            return false;
+        }
+
+        pa_params.add("subsequence_begins", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.block_indices", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.block_indices_begins", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.past_lens", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.cache_interval", ov::element::i32, ov::PartialShape{-1});
+
+        const auto state_consumers = linear_attention_node->output(1).get_target_inputs();
+        const auto state_table_param = pa_params.add(make_gated_delta_state_table_name(m_layer_index++),
+                                                     ov::element::dynamic,
+                                                     make_gated_delta_state_table_shape(linear_attention_node->get_input_partial_shape(5)));
+        enable_keep_const_precision(state_table_param);
+        var_ids_to_remove.insert(linear_attention_node->get_variable_id());
+
+        const auto query = linear_attention_node->input_value(0);
+        const auto key = linear_attention_node->input_value(1);
+        const auto value = linear_attention_node->input_value(2);
+        // The existing GPU LinearAttention primitive consumes input 3 as gate (g) and input 4 as beta.
+        const auto gate = linear_attention_node->input_value(3);
+        const auto beta = linear_attention_node->input_value(4);
+
+        const auto query_flat = flatten_batch_length(query, {2, 3});
+        const auto key_flat = flatten_batch_length(key, {2, 3});
+        const auto value_flat = flatten_batch_length(value, {2, 3});
+        const auto gate_flat = flatten_batch_length(gate, {2});
+        const auto beta_flat = flatten_batch_length(beta, {2});
+
+        const auto paged_gdn = std::make_shared<ov::op::internal::PagedGatedDeltaNet>(query_flat,
+                                                                                     key_flat,
+                                                                                     value_flat,
+                                                                                     state_table_param->output(0),
+                                                                                     gate_flat,
+                                                                                     beta_flat,
+                                                                                     pa_params["subsequence_begins"],
+                                                                                     pa_params["la.block_indices"],
+                                                                                     pa_params["la.block_indices_begins"],
+                                                                                     pa_params["la.past_lens"],
+                                                                                     pa_params["la.cache_interval"],
+                                                                                     true,
+                                                                                     1e-6F,
+                                                                                     1e-6F);
+        paged_gdn->set_friendly_name(linear_attention_node->get_friendly_name() + "/PagedGatedDeltaNet");
+
+        const auto query_shape = std::make_shared<ov::op::v3::ShapeOf>(query, ov::element::i64);
+        const auto value_shape = std::make_shared<ov::op::v3::ShapeOf>(value, ov::element::i64);
+        const auto axis_0 = v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
+        const auto idx_q = v0::Constant::create(ov::element::i64, ov::Shape{2}, {0, 1});
+        const auto idx_v = v0::Constant::create(ov::element::i64, ov::Shape{2}, {2, 3});
+        const auto q_dims = std::make_shared<ov::op::v8::Gather>(query_shape, idx_q, axis_0);
+        const auto v_dims = std::make_shared<ov::op::v8::Gather>(value_shape, idx_v, axis_0);
+        const auto out0_shape = std::make_shared<v0::Concat>(ov::OutputVector{q_dims, v_dims}, 0);
+        const auto paged_gdn_out = std::make_shared<ov::op::v1::Reshape>(paged_gdn, out0_shape, false);
+        paged_gdn_out->set_friendly_name(linear_attention_node->get_friendly_name());
+
+        for (const auto& state_consumer : state_consumers) {
+            state_consumer.replace_source_output(linear_attention_node->input_value(5));
+        }
+
+        ov::copy_runtime_info(linear_attention_node,
+                              {paged_gdn,
+                               query_shape,
+                               value_shape,
+                               q_dims,
+                               v_dims,
+                               out0_shape,
+                               paged_gdn_out});
+
+        if (!ov::replace_output_update_name(linear_attention_node->output(0), paged_gdn_out->output(0))) {
+            linear_attention_node->output(0).replace(paged_gdn_out->output(0));
+        }
+
+        register_new_node(paged_gdn_out);
+        register_new_node(paged_gdn);
+        return true;
+    };
+
+    const auto linear_attention_matcher =
+        std::make_shared<ov::pass::pattern::Matcher>(linear_attention, "PagedLinearAttentionFusion");
+    register_matcher(linear_attention_matcher, linear_attention_callback);
 }
 
 }  // namespace ov::pass

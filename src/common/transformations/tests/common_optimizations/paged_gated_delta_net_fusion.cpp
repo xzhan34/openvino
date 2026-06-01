@@ -16,6 +16,7 @@
 #include "openvino/op/constant.hpp"
 #include "openvino/op/gated_delta_net.hpp"
 #include "openvino/op/gather.hpp"
+#include "openvino/op/linear_attn.hpp"
 #include "openvino/op/paged_gated_delta_net.hpp"
 #include "openvino/op/parameter.hpp"
 #include "openvino/op/read_value.hpp"
@@ -183,11 +184,11 @@ ov::Output<ov::Node> build_paged_gdn_block(const std::shared_ptr<v0::Parameter>&
     const auto q_shape = std::make_shared<v3::ShapeOf>(query, element::i64);
     const auto v_shape = std::make_shared<v3::ShapeOf>(value, element::i64);
     const auto axis_0 = v0::Constant::create(element::i64, Shape{}, {0});
-    const auto idx_q = v0::Constant::create(element::i64, Shape{3}, {0, 1, 2});
-    const auto idx_v = v0::Constant::create(element::i64, Shape{1}, {3});
+    const auto idx_q = v0::Constant::create(element::i64, Shape{2}, {0, 1});
+    const auto idx_v = v0::Constant::create(element::i64, Shape{2}, {2, 3});
     const auto q_dims = std::make_shared<v8::Gather>(q_shape, idx_q, axis_0);
-    const auto v_dim = std::make_shared<v8::Gather>(v_shape, idx_v, axis_0);
-    const auto out_shape = std::make_shared<v0::Concat>(OutputVector{q_dims, v_dim}, 0);
+    const auto v_dims = std::make_shared<v8::Gather>(v_shape, idx_v, axis_0);
+    const auto out_shape = std::make_shared<v0::Concat>(OutputVector{q_dims, v_dims}, 0);
     auto paged_gdn_out = std::make_shared<v1::Reshape>(paged_gdn, out_shape, false);
     paged_gdn_out->set_friendly_name(gdn_friendly_name);
     return paged_gdn_out->output(0);
@@ -367,6 +368,40 @@ std::shared_ptr<ov::Model> build_reference_fused_model_with_gathered_state() {
     return std::make_shared<ov::Model>(ResultVector{out, present_state}, params);
 }
 
+std::shared_ptr<ov::Model> build_linear_attention_model() {
+    auto query = make_f32_param("query", Shape{2, 3, 4, 8});
+    auto key = make_f32_param("key", Shape{2, 3, 4, 8});
+    auto value = make_f32_param("value", Shape{2, 3, 4, 6});
+    auto gate = make_f32_param("gate", Shape{2, 3, 4});
+    auto beta = make_f32_param("beta", Shape{2, 3, 4});
+    auto initial_state = make_f32_param("initial_state", Shape{2, 4, 8, 6});
+
+    ov::op::util::VariableInfo variable_info{PartialShape{2, 4, 8, 6}, element::f32, "linear_states.0.recurrent"};
+    auto variable = std::make_shared<ov::op::util::Variable>(variable_info);
+    auto linear_attention = std::make_shared<ov::op::LinearAttention>(
+        OutputVector{query, key, value, gate, beta, initial_state}, variable);
+
+    return std::make_shared<ov::Model>(ResultVector{std::make_shared<v0::Result>(linear_attention->output(0))},
+                                       ParameterVector{query, key, value, gate, beta, initial_state});
+}
+
+std::shared_ptr<ov::Model> build_linear_attention_gqa_model() {
+    auto query = make_f32_param("query", Shape{2, 3, 2, 8});
+    auto key = make_f32_param("key", Shape{2, 3, 2, 8});
+    auto value = make_f32_param("value", Shape{2, 3, 4, 6});
+    auto gate = make_f32_param("gate", Shape{2, 3, 4});
+    auto beta = make_f32_param("beta", Shape{2, 3, 4});
+    auto initial_state = make_f32_param("initial_state", Shape{2, 4, 8, 6});
+
+    ov::op::util::VariableInfo variable_info{PartialShape{2, 4, 8, 6}, element::f32, "linear_states.0.recurrent"};
+    auto variable = std::make_shared<ov::op::util::Variable>(variable_info);
+    auto linear_attention = std::make_shared<ov::op::LinearAttention>(
+        OutputVector{query, key, value, gate, beta, initial_state}, variable);
+
+    return std::make_shared<ov::Model>(ResultVector{std::make_shared<v0::Result>(linear_attention->output(0))},
+                                       ParameterVector{query, key, value, gate, beta, initial_state});
+}
+
 }  // namespace
 
 class PagedGatedDeltaNetFusionTest : public ::TransformationTestsF {};
@@ -404,4 +439,43 @@ TEST_F(PagedGatedDeltaNetFusionTest, FusesWhenStateInputIsGatherFromReadValue) {
     model = build_fusable_model_with_gathered_state();
     model_ref = build_reference_fused_model_with_gathered_state();
     run_paged_gated_delta_net_fusion(model);
+}
+
+TEST_F(PagedGatedDeltaNetFusionTest, LowersLinearAttentionToPagedGatedDeltaNet) {
+    model = build_linear_attention_model();
+
+    run_paged_gated_delta_net_fusion(model);
+
+    size_t paged_gdn_count = 0;
+    size_t linear_attention_count = 0;
+    bool has_gated_delta_state_table = false;
+    bool has_la_cache_interval = false;
+    bool has_qk_l2norm = false;
+    for (const auto& op : model->get_ordered_ops()) {
+        if (const auto paged_gdn = ov::as_type_ptr<internal::PagedGatedDeltaNet>(op)) {
+            ++paged_gdn_count;
+            has_qk_l2norm |= paged_gdn->get_use_qk_l2norm();
+        }
+        if (ov::is_type<ov::op::LinearAttention>(op)) {
+            ++linear_attention_count;
+        }
+    }
+    for (const auto& param : model->get_parameters()) {
+        has_gated_delta_state_table |= param->get_friendly_name() == "gated_delta_state_table.0";
+        has_la_cache_interval |= param->get_friendly_name() == "la.cache_interval";
+    }
+
+    EXPECT_EQ(paged_gdn_count, 1u);
+    EXPECT_EQ(linear_attention_count, 0u);
+    EXPECT_TRUE(has_gated_delta_state_table);
+    EXPECT_TRUE(has_la_cache_interval);
+    EXPECT_TRUE(has_qk_l2norm);
+}
+
+TEST_F(PagedGatedDeltaNetFusionTest, LowersLinearAttentionGqaToValueHeadOutputShape) {
+    model = build_linear_attention_gqa_model();
+
+    run_paged_gated_delta_net_fusion(model);
+
+    EXPECT_EQ(model->get_results().front()->get_input_partial_shape(0), PartialShape({2, 3, 4, 6}));
 }

@@ -727,6 +727,118 @@ TEST(SDPAToPAKeepConstPrecisionTest, Qwen7bChat_KVCacheParamsMarkedKeepConstPrec
     }
 }
 
+TEST(SDPAToPATest, KeepsAttentionMaskParameterWhenItHasLiveConsumers) {
+    auto beam_idx = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN}}, el_type_i64});
+    auto position_ids = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN, DYN}}, el_type_i64});
+    auto attention_mask = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN, DYN}}, el_type_i64});
+    auto input_ids = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN, DYN}}, el_type_i64});
+    auto params = nodes_to_params({input_ids, attention_mask, position_ids, beam_idx});
+
+    beam_idx->set_friendly_name("beam_idx");
+    position_ids->set_friendly_name("position_ids");
+    attention_mask->set_friendly_name("attention_mask");
+    input_ids->set_friendly_name("input_ids");
+    beam_idx->output(0).add_names({"beam_idx"});
+    position_ids->output(0).add_names({"position_ids"});
+    attention_mask->output(0).add_names({"attention_mask"});
+    input_ids->output(0).add_names({"input_ids"});
+
+    auto embeddings = Qwen7bChatSDPA::gen_embeddings(input_ids);
+    auto qkv_proj = Qwen7bChatSDPA::gen_qkv_proj(embeddings);
+    auto k_cache = Qwen7bChatSDPA::gen_cache(input_ids, beam_idx, "K_cache");
+    auto v_cache = Qwen7bChatSDPA::gen_cache(input_ids, beam_idx, "V_cache");
+
+    auto current_seq_len = Qwen7bChatSDPA::gen_current_len(input_ids);
+    auto past_seq_len = Qwen7bChatSDPA::gen_past_len(k_cache);
+    auto total_seq_len = Qwen7bChatSDPA::gen_total_len(current_seq_len, past_seq_len);
+    auto neg_cur_seq_len = Qwen7bChatSDPA::neg_mul(current_seq_len);
+    auto head_size = shared_ptr<Node>();
+    auto rope_emb_sin = Qwen7bChatSDPA::gen_rope_emb_sin(total_seq_len, neg_cur_seq_len, head_size, element::f32);
+    auto rope_emb_cos = Qwen7bChatSDPA::gen_rope_emb_cos(total_seq_len, neg_cur_seq_len, element::f32);
+    auto rope_q = Qwen7bChatSDPA::gen_rope(QKV::Q, qkv_proj, head_size, rope_emb_sin, rope_emb_cos);
+    auto rope_k = Qwen7bChatSDPA::gen_rope(QKV::K, qkv_proj, head_size, rope_emb_sin, rope_emb_cos);
+
+    auto total_seq_len_2 = Qwen7bChatSDPA::gen_total_seq_len_2(past_seq_len, rope_k);
+    auto past_seq_len_2 = Qwen7bChatSDPA::gen_past_seq_len_2(total_seq_len_2, rope_q);
+    auto Q = Qwen7bChatSDPA::gen_Q(past_seq_len_2, total_seq_len_2, rope_q);
+    auto K = Qwen7bChatSDPA::gen_K(k_cache, rope_k);
+    auto V = Qwen7bChatSDPA::gen_V(v_cache, qkv_proj);
+    auto attention_mask_to_sdpa = Qwen7bChatSDPA::gen_attention_mask(Q, attention_mask, total_seq_len_2);
+    auto sdpa = std::make_shared<v13::ScaledDotProductAttention>(Q, K, V, attention_mask_to_sdpa, false);
+
+    auto live_attention_mask_consumer = std::make_shared<v0::Convert>(attention_mask, element::f32);
+    auto transformed_model = std::make_shared<ov::Model>(
+        ResultVector{std::make_shared<v0::Result>(sdpa), std::make_shared<v0::Result>(live_attention_mask_consumer)},
+        params);
+
+    ov::pass::Manager local_manager;
+    local_manager.register_pass<ov::pass::SDPAToPagedAttention>();
+    ASSERT_NO_THROW(local_manager.run_passes(transformed_model));
+
+    bool has_attention_mask = false;
+    for (const auto& param : transformed_model->get_parameters()) {
+        has_attention_mask |= param->get_friendly_name() == "attention_mask";
+    }
+    EXPECT_TRUE(has_attention_mask);
+}
+
+TEST(SDPAToPATest, RemovesAttentionMaskHiddenMultiplyAfterCompactInputs) {
+    auto beam_idx = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN}}, el_type_i64});
+    auto position_ids = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN, DYN}}, el_type_i64});
+    auto attention_mask = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN, DYN}}, el_type_i64});
+    auto input_ids = makeOP<v0::Parameter>({}, {{"shape", PartialShape{DYN, DYN}}, el_type_i64});
+    auto params = nodes_to_params({input_ids, attention_mask, position_ids, beam_idx});
+
+    beam_idx->set_friendly_name("beam_idx");
+    position_ids->set_friendly_name("position_ids");
+    attention_mask->set_friendly_name("attention_mask");
+    input_ids->set_friendly_name("input_ids");
+    beam_idx->output(0).add_names({"beam_idx"});
+    position_ids->output(0).add_names({"position_ids"});
+    attention_mask->output(0).add_names({"attention_mask"});
+    input_ids->output(0).add_names({"input_ids"});
+
+    auto embeddings = Qwen7bChatSDPA::gen_embeddings(input_ids);
+    auto attention_mask_f32 = std::make_shared<v0::Convert>(attention_mask, element::f32);
+    auto attention_mask_unsqueezed = std::make_shared<v0::Unsqueeze>(
+        attention_mask_f32,
+        v0::Constant::create(element::i64, Shape{1}, {2}));
+    auto masked_embeddings = std::make_shared<v1::Multiply>(embeddings, attention_mask_unsqueezed);
+    auto qkv_proj = Qwen7bChatSDPA::gen_qkv_proj(masked_embeddings);
+
+    auto k_cache = Qwen7bChatSDPA::gen_cache(input_ids, beam_idx, "K_cache");
+    auto v_cache = Qwen7bChatSDPA::gen_cache(input_ids, beam_idx, "V_cache");
+    auto current_seq_len = Qwen7bChatSDPA::gen_current_len(input_ids);
+    auto past_seq_len = Qwen7bChatSDPA::gen_past_len(k_cache);
+    auto total_seq_len = Qwen7bChatSDPA::gen_total_len(current_seq_len, past_seq_len);
+    auto neg_cur_seq_len = Qwen7bChatSDPA::neg_mul(current_seq_len);
+    auto head_size = shared_ptr<Node>();
+    auto rope_emb_sin = Qwen7bChatSDPA::gen_rope_emb_sin(total_seq_len, neg_cur_seq_len, head_size, element::f32);
+    auto rope_emb_cos = Qwen7bChatSDPA::gen_rope_emb_cos(total_seq_len, neg_cur_seq_len, element::f32);
+    auto rope_q = Qwen7bChatSDPA::gen_rope(QKV::Q, qkv_proj, head_size, rope_emb_sin, rope_emb_cos);
+    auto rope_k = Qwen7bChatSDPA::gen_rope(QKV::K, qkv_proj, head_size, rope_emb_sin, rope_emb_cos);
+
+    auto total_seq_len_2 = Qwen7bChatSDPA::gen_total_seq_len_2(past_seq_len, rope_k);
+    auto past_seq_len_2 = Qwen7bChatSDPA::gen_past_seq_len_2(total_seq_len_2, rope_q);
+    auto Q = Qwen7bChatSDPA::gen_Q(past_seq_len_2, total_seq_len_2, rope_q);
+    auto K = Qwen7bChatSDPA::gen_K(k_cache, rope_k);
+    auto V = Qwen7bChatSDPA::gen_V(v_cache, qkv_proj);
+    auto attention_mask_to_sdpa = Qwen7bChatSDPA::gen_attention_mask(Q, attention_mask, total_seq_len_2);
+    auto sdpa = std::make_shared<v13::ScaledDotProductAttention>(Q, K, V, attention_mask_to_sdpa, false);
+
+    auto transformed_model = std::make_shared<ov::Model>(ResultVector{std::make_shared<v0::Result>(sdpa)}, params);
+
+    ov::pass::Manager local_manager;
+    local_manager.register_pass<ov::pass::SDPAToPagedAttention>();
+    ASSERT_NO_THROW(local_manager.run_passes(transformed_model));
+
+    bool has_attention_mask = false;
+    for (const auto& param : transformed_model->get_parameters()) {
+        has_attention_mask |= param->get_friendly_name() == "attention_mask";
+    }
+    EXPECT_FALSE(has_attention_mask);
+}
+
 TEST_F(SDPAToPATest, SDPAToPA_Qwen7bChat_TotalSequenceLengthPattern) {
     {
         // Inputs to SDPA transformer:

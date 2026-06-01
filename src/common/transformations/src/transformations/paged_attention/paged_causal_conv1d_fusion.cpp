@@ -20,13 +20,16 @@
 #include "openvino/op/concat.hpp"
 #include "openvino/op/constant.hpp"
 #include "openvino/op/gather.hpp"
+#include "openvino/op/fused_conv.hpp"
 #include "openvino/op/group_conv.hpp"
 #include "openvino/op/multiply.hpp"
 #include "openvino/op/paged_causal_conv1d.hpp"
 #include "openvino/op/parameter.hpp"
 #include "openvino/op/reshape.hpp"
 #include "openvino/op/result.hpp"
+#include "openvino/op/shape_of.hpp"
 #include "openvino/op/slice.hpp"
+#include "openvino/op/swish.hpp"
 #include "openvino/op/transpose.hpp"
 #include "openvino/op/unsqueeze.hpp"
 #include "openvino/op/util/read_value_base.hpp"
@@ -54,6 +57,45 @@ ov::PartialShape make_conv_state_table_shape(const ov::PartialShape& past_state_
         return ov::PartialShape{ov::Dimension::dynamic(), past_state_shape[1], past_state_shape[2]};
     }
     return ov::PartialShape::dynamic(3);
+}
+
+std::shared_ptr<ov::Node> gather_shape_dims(const ov::Output<ov::Node>& input, const std::vector<int64_t>& indices) {
+    const auto shape_of = std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64);
+    const auto gather_indices = v0::Constant::create(ov::element::i64, ov::Shape{indices.size()}, indices);
+    const auto axis = v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
+    return std::make_shared<v8::Gather>(shape_of, gather_indices, axis);
+}
+
+ov::Output<ov::Node> flatten_bcs_to_tc(const ov::Output<ov::Node>& input) {
+    const auto order = v0::Constant::create(ov::element::i64, ov::Shape{3}, {0, 2, 1});
+    const auto transposed = std::make_shared<v1::Transpose>(input, order);
+    const auto channel_dim = gather_shape_dims(input, {1});
+    const auto flat_dim = v0::Constant::create(ov::element::i64, ov::Shape{1}, {-1});
+    const auto flat_shape = std::make_shared<v0::Concat>(ov::OutputVector{flat_dim, channel_dim}, 0);
+    return std::make_shared<v1::Reshape>(transposed, flat_shape, false);
+}
+
+ov::Output<ov::Node> restore_tc_to_bcs(const ov::Output<ov::Node>& input, const ov::Output<ov::Node>& reference_bcs) {
+    const auto bsc_shape = gather_shape_dims(reference_bcs, {0, 2, 1});
+    const auto reshaped = std::make_shared<v1::Reshape>(input, bsc_shape, false);
+    const auto order = v0::Constant::create(ov::element::i64, ov::Shape{3}, {0, 2, 1});
+    return std::make_shared<v1::Transpose>(reshaped, order);
+}
+
+ov::Output<ov::Node> reshape_ck_to_c1k(const ov::Output<ov::Node>& weight) {
+    const auto c_dim = gather_shape_dims(weight, {0});
+    const auto k_dim = gather_shape_dims(weight, {1});
+    const auto one = v0::Constant::create(ov::element::i64, ov::Shape{1}, {1});
+    const auto weight_shape = std::make_shared<v0::Concat>(ov::OutputVector{c_dim, one, k_dim}, 0);
+    return std::make_shared<v1::Reshape>(weight, weight_shape, false);
+}
+
+ov::Output<ov::Node> convert_to_if_needed(const ov::Output<ov::Node>& input, const ov::element::Type& dst_type) {
+    const auto& src_type = input.get_element_type();
+    if (src_type.is_dynamic() || dst_type.is_dynamic() || src_type == dst_type) {
+        return input;
+    }
+    return std::make_shared<v0::Convert>(input, dst_type);
 }
 
 }  // namespace
@@ -199,6 +241,75 @@ PagedCausalConv1DFusion::PagedCausalConv1DFusion(ov::pass::paged_attention::PaPa
 
     const auto matcher = std::make_shared<ov::pass::pattern::Matcher>(p_slice_out, matcher_name);
     register_matcher(matcher, callback);
+
+    auto p_fused_conv = wrap_type<ov::op::FusedConv>();
+
+    ov::matcher_pass_callback fused_conv_callback = [OV_CAPTURE_CPY_AND_THIS, &pa_params, &var_ids_to_remove](
+                                                        ov::pass::pattern::Matcher& m) {
+        if (transformation_callback(m.get_match_root())) {
+            return false;
+        }
+
+        const auto fused_conv = ov::as_type_ptr<ov::op::FusedConv>(m.get_match_root());
+        if (!fused_conv || !fused_conv->get_variable()) {
+            return false;
+        }
+
+        pa_params.add("subsequence_begins", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.block_indices", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.block_indices_begins", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.past_lens", ov::element::i32, ov::PartialShape{-1});
+        pa_params.add("la.cache_interval", ov::element::i32, ov::PartialShape{-1});
+
+        const auto conv_state_table = pa_params.add("conv_state_table." + std::to_string(m_layer_index++),
+                                                    ov::element::dynamic,
+                                                    make_conv_state_table_shape(fused_conv->get_input_partial_shape(3)));
+        enable_keep_const_precision(conv_state_table);
+        var_ids_to_remove.insert(fused_conv->get_variable_id());
+
+        const auto input_flat = flatten_bcs_to_tc(fused_conv->input_value(0));
+        const auto weight_reshaped = reshape_ck_to_c1k(fused_conv->input_value(1));
+        const auto& elem_type = input_flat.get_element_type();
+        const auto weight_input = convert_to_if_needed(weight_reshaped, elem_type);
+        const auto bias = v0::Constant::create(elem_type, ov::Shape{0}, std::vector<float>{});
+
+        const auto paged_conv = std::make_shared<ov::op::internal::PagedCausalConv1D>(input_flat,
+                                                                                     conv_state_table,
+                                                                                     weight_input,
+                                                                                     bias,
+                                                                                     pa_params["subsequence_begins"],
+                                                                                     pa_params["la.block_indices"],
+                                                                                     pa_params["la.block_indices_begins"],
+                                                                                     pa_params["la.past_lens"],
+                                                                                     pa_params["la.cache_interval"]);
+        paged_conv->set_friendly_name(fused_conv->get_friendly_name() + "/PagedCausalConv1D");
+
+        const auto restored = restore_tc_to_bcs(paged_conv, fused_conv->input_value(0));
+        const auto swish = std::make_shared<ov::op::v4::Swish>(restored);
+        swish->set_friendly_name(fused_conv->get_friendly_name());
+
+        const auto state_consumers = fused_conv->output(1).get_target_inputs();
+        for (const auto& state_consumer : state_consumers) {
+            state_consumer.replace_source_output(fused_conv->input_value(3));
+        }
+
+        ov::copy_runtime_info(fused_conv,
+                              {input_flat.get_node_shared_ptr(),
+                               weight_reshaped.get_node_shared_ptr(),
+                               weight_input.get_node_shared_ptr(),
+                               bias,
+                               paged_conv,
+                               restored.get_node_shared_ptr(),
+                               swish});
+
+        if (!ov::replace_output_update_name(fused_conv->output(0), swish->output(0))) {
+            fused_conv->output(0).replace(swish->output(0));
+        }
+        return true;
+    };
+
+    const auto fused_conv_matcher = std::make_shared<ov::pass::pattern::Matcher>(p_fused_conv, "PagedFusedConvFusion");
+    register_matcher(fused_conv_matcher, fused_conv_callback);
 }
 
 }  // namespace ov::pass

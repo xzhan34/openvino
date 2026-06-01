@@ -4,11 +4,16 @@
 
 #include "openvino/pass/sdpa_to_paged_attention.hpp"
 
+#include <unordered_set>
+#include <vector>
+
 #include "openvino/cc/pass/itt.hpp"
 #include "openvino/core/graph_util.hpp"
 #include "openvino/op/assign.hpp"
 #include "openvino/op/constant.hpp"
 #include "openvino/op/gather.hpp"
+#include "openvino/op/multiply.hpp"
+#include "openvino/op/result.hpp"
 #include "openvino/op/scaled_dot_product_attention.hpp"
 #include "openvino/op/shape_of.hpp"
 #include "openvino/op/subtract.hpp"
@@ -47,6 +52,111 @@ std::shared_ptr<v0::Parameter> get_parameter(const std::shared_ptr<ov::Model>& m
     }
 
     return nullptr;
+}
+
+bool output_depends_on_node(const ov::Output<ov::Node>& output, const ov::Node* dependency) {
+    std::vector<const ov::Node*> stack{output.get_node()};
+    std::unordered_set<const ov::Node*> visited;
+
+    while (!stack.empty()) {
+        const auto* node = stack.back();
+        stack.pop_back();
+        if (!node || !visited.insert(node).second) {
+            continue;
+        }
+        if (node == dependency) {
+            return true;
+        }
+        for (const auto& input : node->inputs()) {
+            stack.push_back(input.get_source_output().get_node());
+        }
+    }
+
+    return false;
+}
+
+std::unordered_set<const ov::Node*> get_terminal_nodes(const std::shared_ptr<ov::Model>& model,
+                                                       const ov::ResultVector& extra_results) {
+    std::unordered_set<const ov::Node*> terminals;
+    for (const auto& result : model->get_results()) {
+        terminals.insert(result.get());
+    }
+    for (const auto& result : extra_results) {
+        terminals.insert(result.get());
+    }
+    for (const auto& sink : model->get_sinks()) {
+        terminals.insert(sink.get());
+    }
+    return terminals;
+}
+
+bool node_reaches_terminal(const ov::Node* start, const std::unordered_set<const ov::Node*>& terminals) {
+    std::vector<const ov::Node*> stack{start};
+    std::unordered_set<const ov::Node*> visited;
+
+    while (!stack.empty()) {
+        const auto* node = stack.back();
+        stack.pop_back();
+        if (!node || !visited.insert(node).second) {
+            continue;
+        }
+        if (terminals.count(node) != 0) {
+            return true;
+        }
+        for (const auto& user : node->get_users(false)) {
+            stack.push_back(user.get());
+        }
+    }
+
+    return false;
+}
+
+bool output_has_live_consumers(const ov::Output<ov::Node>& output,
+                               const std::unordered_set<const ov::Node*>& terminals) {
+    for (const auto& target : output.get_target_inputs()) {
+        if (node_reaches_terminal(target.get_node(), terminals)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool bypass_attention_mask_hidden_multiply(const std::shared_ptr<ov::Model>& model,
+                                           const std::shared_ptr<v0::Parameter>& attention_mask) {
+    bool changed = false;
+    const auto* attention_mask_node = attention_mask.get();
+
+    for (const auto& node : model->get_ordered_ops()) {
+        const auto multiply = ov::as_type_ptr<ov::op::v1::Multiply>(node);
+        if (!multiply || multiply->get_input_size() != 2 || multiply->get_output_size() != 1) {
+            continue;
+        }
+
+        const bool lhs_depends_on_mask = output_depends_on_node(multiply->input_value(0), attention_mask_node);
+        const bool rhs_depends_on_mask = output_depends_on_node(multiply->input_value(1), attention_mask_node);
+        if (lhs_depends_on_mask == rhs_depends_on_mask) {
+            continue;
+        }
+
+        const auto data_input = lhs_depends_on_mask ? multiply->input_value(1) : multiply->input_value(0);
+        const auto mask_input = lhs_depends_on_mask ? multiply->input_value(0) : multiply->input_value(1);
+        const auto data_shape = data_input.get_partial_shape();
+        const auto mask_shape = mask_input.get_partial_shape();
+        const auto output_shape = multiply->get_output_partial_shape(0);
+        if (!data_shape.rank().is_static() || data_shape.rank().get_length() != 3 ||
+            !mask_shape.rank().is_static() || mask_shape.rank().get_length() != 3 ||
+            !output_shape.rank().is_static() || output_shape.rank().get_length() != 3 ||
+            !mask_shape[2].compatible(ov::Dimension(1))) {
+            continue;
+        }
+
+        if (!ov::replace_output_update_name(multiply->output(0), data_input)) {
+            multiply->output(0).replace(data_input);
+        }
+        changed = true;
+    }
+
+    return changed;
 }
 
 }  // namespace
@@ -159,6 +269,10 @@ bool ov::pass::SDPAToPagedAttention::run_on_model(const std::shared_ptr<ov::Mode
     manager.register_pass<PositionIDsReplacerLFM2>(position_ids);
     manager.run_passes(model);
 
+    if (auto attention_mask = get_parameter(model, "attention_mask")) {
+        bypass_attention_mask_hidden_multiply(model, attention_mask);
+    }
+
     {
         // Remove all Assigns aggressively, the path from the kv-cache concat to Assign can be complicated,
         // but there is no reason to track it and reject part of the Assigns, because the model will remain
@@ -174,23 +288,11 @@ bool ov::pass::SDPAToPagedAttention::run_on_model(const std::shared_ptr<ov::Mode
         }
     }
 
+    const auto terminal_nodes = get_terminal_nodes(model, m_results.items());
     for (auto& param_name : {"beam_idx", "attention_mask"}) {
         if (auto param = get_parameter(model, param_name)) {
-            model->remove_parameter(param);
-
-            if (param->output(0).get_target_inputs().size() == 0) {
-                std::stringstream consumers;
-                consumers << std::endl;
-                for (auto& input : param->output(0).get_target_inputs()) {
-                    consumers << *input.get_node() << std::endl;
-                }
-                OPENVINO_ASSERT(param->output(0).get_target_inputs().size() == 0,
-                                "PagedAttention transformation failed: couldn't remove ",
-                                param->output(0).get_target_inputs().size(),
-                                " inputs of ",
-                                param_name,
-                                " input: ",
-                                consumers.str());
+            if (!output_has_live_consumers(param->output(0), terminal_nodes)) {
+                model->remove_parameter(param);
             }
         }
     }

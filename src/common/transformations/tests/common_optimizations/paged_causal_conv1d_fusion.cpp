@@ -16,6 +16,7 @@
 #include "openvino/op/concat.hpp"
 #include "openvino/op/constant.hpp"
 #include "openvino/op/convert.hpp"
+#include "openvino/op/fused_conv.hpp"
 #include "openvino/op/group_conv.hpp"
 #include "openvino/op/multiply.hpp"
 #include "openvino/op/paged_causal_conv1d.hpp"
@@ -435,6 +436,24 @@ std::shared_ptr<ov::Model> build_model_without_concat_lfm2_like_multiple() {
     return std::make_shared<ov::Model>(results, params);
 }
 
+std::shared_ptr<ov::Model> build_fused_conv_model() {
+    auto input = std::make_shared<v0::Parameter>(element::f32, PartialShape{2, 3, 1});
+    input->set_friendly_name("mixed_qkv");
+    auto weight = v0::Constant::create(element::f32, Shape{3, 4}, std::vector<float>(12, 0.25f));
+    auto beam_idx = std::make_shared<v0::Parameter>(element::i32, PartialShape{2});
+    beam_idx->set_friendly_name("beam_idx");
+    beam_idx->get_output_tensor(0).set_names({"beam_idx"});
+    auto initial_state = std::make_shared<v0::Parameter>(element::f32, PartialShape{2, 3, 4});
+    initial_state->set_friendly_name("conv_initial_state");
+
+    ov::op::util::VariableInfo variable_info{PartialShape{2, 3, 4}, element::f32, "linear_states.0.conv"};
+    auto variable = std::make_shared<ov::op::util::Variable>(variable_info);
+    auto fused_conv = std::make_shared<ov::op::FusedConv>(OutputVector{input, weight, beam_idx, initial_state}, variable);
+
+    return std::make_shared<ov::Model>(ResultVector{std::make_shared<v0::Result>(fused_conv->output(0))},
+                                       ParameterVector{input, beam_idx, initial_state});
+}
+
 }  // namespace
 
 class PagedCausalConv1DFusionTest : public ::TransformationTestsF {};
@@ -595,4 +614,37 @@ TEST_F(PagedCausalConv1DFusionTest, FusesNoBiasUsesEmptyBiasConstant) {
     run_paged_causal_conv1d_fusion(model);
 
     model_ref = build_fused_reference_model(false);
+}
+
+TEST_F(PagedCausalConv1DFusionTest, LowersFusedConvToPagedConvAndSwish) {
+    model = build_fused_conv_model();
+
+    run_paged_causal_conv1d_fusion(model);
+
+    size_t paged_conv_count = 0;
+    size_t swish_count = 0;
+    size_t fused_conv_count = 0;
+    bool has_conv_state_table = false;
+    bool has_la_block_indices = false;
+    for (const auto& op : model->get_ordered_ops()) {
+        if (std::string(op->get_type_name()) == "PagedCausalConv1D") {
+            ++paged_conv_count;
+        }
+        if (ov::is_type<ov::op::v4::Swish>(op)) {
+            ++swish_count;
+        }
+        if (ov::is_type<ov::op::FusedConv>(op)) {
+            ++fused_conv_count;
+        }
+    }
+    for (const auto& param : model->get_parameters()) {
+        has_conv_state_table |= param->get_friendly_name() == "conv_state_table.0";
+        has_la_block_indices |= param->get_friendly_name() == "la.block_indices";
+    }
+
+    EXPECT_EQ(paged_conv_count, 1u);
+    EXPECT_EQ(swish_count, 1u);
+    EXPECT_EQ(fused_conv_count, 0u);
+    EXPECT_TRUE(has_conv_state_table);
+    EXPECT_TRUE(has_la_block_indices);
 }
