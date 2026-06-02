@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "common_test_utils/ov_test_utils.hpp"
 #include "openvino/op/add.hpp"
@@ -148,6 +149,27 @@ ov::Output<ov::Node> ref_flatten_blh_to_th(const ov::Output<ov::Node>& input) {
     return std::make_shared<v1::Reshape>(input, flat_shape, false);
 }
 
+enum class OutputRestoreShapePolicy { LegacyQueryHeads, ValueHeads };
+
+std::shared_ptr<ov::Node> make_output_restore_shape(const ov::Output<ov::Node>& query,
+                                                    const ov::Output<ov::Node>& value,
+                                                    OutputRestoreShapePolicy policy) {
+    const auto q_shape = std::make_shared<v3::ShapeOf>(query, element::i64);
+    const auto v_shape = std::make_shared<v3::ShapeOf>(value, element::i64);
+    const auto axis_0 = v0::Constant::create(element::i64, Shape{}, {0});
+    const std::vector<int64_t> query_indices =
+        policy == OutputRestoreShapePolicy::LegacyQueryHeads ? std::vector<int64_t>{0, 1, 2}
+                                                             : std::vector<int64_t>{0, 1};
+    const std::vector<int64_t> value_indices =
+        policy == OutputRestoreShapePolicy::LegacyQueryHeads ? std::vector<int64_t>{3}
+                                                             : std::vector<int64_t>{2, 3};
+    const auto idx_q = v0::Constant::create(element::i64, Shape{query_indices.size()}, query_indices);
+    const auto idx_v = v0::Constant::create(element::i64, Shape{value_indices.size()}, value_indices);
+    const auto q_dims = std::make_shared<v8::Gather>(q_shape, idx_q, axis_0);
+    const auto v_dims = std::make_shared<v8::Gather>(v_shape, idx_v, axis_0);
+    return std::make_shared<v0::Concat>(OutputVector{q_dims, v_dims}, 0);
+}
+
 // Builds the PagedGDN block + output reshape that replaces GDN in the fused graph.
 // Returns {paged_gdn_out, paged_gdn} where paged_gdn_out is the final reshaped output.
 ov::Output<ov::Node> build_paged_gdn_block(const std::shared_ptr<v0::Parameter>& query,
@@ -161,7 +183,9 @@ ov::Output<ov::Node> build_paged_gdn_block(const std::shared_ptr<v0::Parameter>&
                                            const std::shared_ptr<v0::Parameter>& block_indices_begins,
                                            const std::shared_ptr<v0::Parameter>& past_lens,
                                            const std::shared_ptr<v0::Parameter>& cache_interval,
-                                           const std::string& gdn_friendly_name) {
+                                           const std::string& gdn_friendly_name,
+                                           OutputRestoreShapePolicy restore_shape_policy =
+                                               OutputRestoreShapePolicy::LegacyQueryHeads) {
     const auto query_flat = ref_flatten_blhd_to_thd(query);
     const auto key_flat = ref_flatten_blhd_to_thd(key);
     const auto value_flat = ref_flatten_blhd_to_thd(value);
@@ -181,14 +205,7 @@ ov::Output<ov::Node> build_paged_gdn_block(const std::shared_ptr<v0::Parameter>&
                                                                     cache_interval->output(0));
     paged_gdn->set_friendly_name(gdn_friendly_name + "/PagedGatedDeltaNet");
 
-    const auto q_shape = std::make_shared<v3::ShapeOf>(query, element::i64);
-    const auto v_shape = std::make_shared<v3::ShapeOf>(value, element::i64);
-    const auto axis_0 = v0::Constant::create(element::i64, Shape{}, {0});
-    const auto idx_q = v0::Constant::create(element::i64, Shape{2}, {0, 1});
-    const auto idx_v = v0::Constant::create(element::i64, Shape{2}, {2, 3});
-    const auto q_dims = std::make_shared<v8::Gather>(q_shape, idx_q, axis_0);
-    const auto v_dims = std::make_shared<v8::Gather>(v_shape, idx_v, axis_0);
-    const auto out_shape = std::make_shared<v0::Concat>(OutputVector{q_dims, v_dims}, 0);
+    const auto out_shape = make_output_restore_shape(query, value, restore_shape_policy);
     auto paged_gdn_out = std::make_shared<v1::Reshape>(paged_gdn, out_shape, false);
     paged_gdn_out->set_friendly_name(gdn_friendly_name);
     return paged_gdn_out->output(0);
@@ -406,13 +423,16 @@ std::shared_ptr<ov::Model> build_linear_attention_gqa_model() {
 
 class PagedGatedDeltaNetFusionTest : public ::TransformationTestsF {};
 
-void run_paged_gated_delta_net_fusion(const std::shared_ptr<ov::Model>& model) {
+void run_paged_gated_delta_net_fusion(const std::shared_ptr<ov::Model>& model,
+                                      bool enable_modeling_provider_ops = false) {
     ov::pass::paged_attention::PaParams pa_params{model->get_parameters()};
     std::unordered_set<std::string> var_ids_to_remove;
 
     ov::pass::Manager manager;
     manager.set_per_pass_validation(false);
-    manager.register_pass<ov::pass::PagedGatedDeltaNetFusion>(pa_params, var_ids_to_remove);
+    manager.register_pass<ov::pass::PagedGatedDeltaNetFusion>(pa_params,
+                                                              var_ids_to_remove,
+                                                              enable_modeling_provider_ops);
     manager.run_passes(model);
     model->add_parameters(pa_params.items());
     model->validate_nodes_and_infer_types();
@@ -441,10 +461,30 @@ TEST_F(PagedGatedDeltaNetFusionTest, FusesWhenStateInputIsGatherFromReadValue) {
     run_paged_gated_delta_net_fusion(model);
 }
 
-TEST_F(PagedGatedDeltaNetFusionTest, LowersLinearAttentionToPagedGatedDeltaNet) {
+TEST_F(PagedGatedDeltaNetFusionTest, DoesNotLowerLinearAttentionWhenModelingProviderOpsDisabled) {
     model = build_linear_attention_model();
 
     run_paged_gated_delta_net_fusion(model);
+
+    size_t paged_gdn_count = 0;
+    size_t linear_attention_count = 0;
+    for (const auto& op : model->get_ordered_ops()) {
+        if (ov::is_type<internal::PagedGatedDeltaNet>(op)) {
+            ++paged_gdn_count;
+        }
+        if (ov::is_type<ov::op::LinearAttention>(op)) {
+            ++linear_attention_count;
+        }
+    }
+
+    EXPECT_EQ(paged_gdn_count, 0u);
+    EXPECT_EQ(linear_attention_count, 1u);
+}
+
+TEST_F(PagedGatedDeltaNetFusionTest, LowersLinearAttentionToPagedGatedDeltaNet) {
+    model = build_linear_attention_model();
+
+    run_paged_gated_delta_net_fusion(model, true);
 
     size_t paged_gdn_count = 0;
     size_t linear_attention_count = 0;
@@ -475,7 +515,7 @@ TEST_F(PagedGatedDeltaNetFusionTest, LowersLinearAttentionToPagedGatedDeltaNet) 
 TEST_F(PagedGatedDeltaNetFusionTest, LowersLinearAttentionGqaToValueHeadOutputShape) {
     model = build_linear_attention_gqa_model();
 
-    run_paged_gated_delta_net_fusion(model);
+    run_paged_gated_delta_net_fusion(model, true);
 
     EXPECT_EQ(model->get_results().front()->get_input_partial_shape(0), PartialShape({2, 3, 4, 6}));
 }

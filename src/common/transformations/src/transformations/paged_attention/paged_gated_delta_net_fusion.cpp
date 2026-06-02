@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "itt.hpp"
 #include "openvino/core/graph_util.hpp"
@@ -68,12 +69,47 @@ ov::Output<ov::Node> flatten_batch_length(const ov::Output<ov::Node>& input,
 
     return reshaped;
 }
+
+enum class OutputRestoreShapePolicy { LegacyQueryHeads, ValueHeads };
+
+struct OutputRestoreShape {
+    std::shared_ptr<ov::Node> query_shape;
+    std::shared_ptr<ov::Node> value_shape;
+    std::shared_ptr<ov::Node> query_dims;
+    std::shared_ptr<ov::Node> value_dims;
+    std::shared_ptr<ov::Node> output_shape;
+
+    ov::NodeVector nodes() const {
+        return {query_shape, value_shape, query_dims, value_dims, output_shape};
+    }
+};
+
+OutputRestoreShape make_output_restore_shape(const ov::Output<ov::Node>& query,
+                                             const ov::Output<ov::Node>& value,
+                                             OutputRestoreShapePolicy policy) {
+    const auto query_shape = std::make_shared<ov::op::v3::ShapeOf>(query, ov::element::i64);
+    const auto value_shape = std::make_shared<ov::op::v3::ShapeOf>(value, ov::element::i64);
+    const auto axis_0 = v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
+    const std::vector<int64_t> query_indices =
+        policy == OutputRestoreShapePolicy::LegacyQueryHeads ? std::vector<int64_t>{0, 1, 2}
+                                                             : std::vector<int64_t>{0, 1};
+    const std::vector<int64_t> value_indices =
+        policy == OutputRestoreShapePolicy::LegacyQueryHeads ? std::vector<int64_t>{3}
+                                                             : std::vector<int64_t>{2, 3};
+    const auto idx_q = v0::Constant::create(ov::element::i64, ov::Shape{query_indices.size()}, query_indices);
+    const auto idx_v = v0::Constant::create(ov::element::i64, ov::Shape{value_indices.size()}, value_indices);
+    const auto query_dims = std::make_shared<ov::op::v8::Gather>(query_shape, idx_q, axis_0);
+    const auto value_dims = std::make_shared<ov::op::v8::Gather>(value_shape, idx_v, axis_0);
+    const auto output_shape = std::make_shared<v0::Concat>(ov::OutputVector{query_dims, value_dims}, 0);
+    return {query_shape, value_shape, query_dims, value_dims, output_shape};
+}
 }  // namespace
 
 namespace ov::pass {
 
 PagedGatedDeltaNetFusion::PagedGatedDeltaNetFusion(ov::pass::paged_attention::PaParams& pa_params,
-                                                   std::unordered_set<std::string>& var_ids_to_remove) {
+                                                   std::unordered_set<std::string>& var_ids_to_remove,
+                                                   bool enable_modeling_provider_ops) {
     auto query = any_input();
     auto key = any_input();
     auto value = any_input();
@@ -141,19 +177,15 @@ PagedGatedDeltaNetFusion::PagedGatedDeltaNetFusion(ov::pass::paged_attention::Pa
                                                                    gdn_node->get_k_l2_norm_eps());
 
         paged_gdn->set_friendly_name(gdn_node->get_friendly_name() + "/PagedGatedDeltaNet");
-        const auto query_shape = std::make_shared<ov::op::v3::ShapeOf>(pm.at(query), ov::element::i64);
-        const auto value_shape = std::make_shared<ov::op::v3::ShapeOf>(pm.at(value), ov::element::i64);
-        const auto axis_0 = v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
-        const auto idx_q = v0::Constant::create(ov::element::i64, ov::Shape{2}, {0, 1});
-        const auto idx_v = v0::Constant::create(ov::element::i64, ov::Shape{2}, {2, 3});
-        const auto q_dims = std::make_shared<ov::op::v8::Gather>(query_shape, idx_q, axis_0);
-        const auto v_dims = std::make_shared<ov::op::v8::Gather>(value_shape, idx_v, axis_0);
-        const auto out0_shape = std::make_shared<v0::Concat>(ov::OutputVector{q_dims, v_dims}, 0);
-        const auto paged_gdn_out = std::make_shared<ov::op::v1::Reshape>(paged_gdn, out0_shape, false);
+        const auto restore_shape =
+            make_output_restore_shape(pm.at(query), pm.at(value), OutputRestoreShapePolicy::LegacyQueryHeads);
+        const auto paged_gdn_out = std::make_shared<ov::op::v1::Reshape>(paged_gdn, restore_shape.output_shape, false);
         paged_gdn_out->set_friendly_name(gdn_node->get_friendly_name());
 
-        ov::copy_runtime_info(gdn_node,
-                      {paged_gdn, query_shape, value_shape, q_dims, v_dims, out0_shape, paged_gdn_out});
+        auto rt_nodes = restore_shape.nodes();
+        rt_nodes.push_back(paged_gdn);
+        rt_nodes.push_back(paged_gdn_out);
+        ov::copy_runtime_info(gdn_node, rt_nodes);
 
         // Disconnect GDN state output consumers; cleanup is driven by ReadValue variable ids.
         for (const auto& state_consumer : state_consumers) {
@@ -172,6 +204,10 @@ PagedGatedDeltaNetFusion::PagedGatedDeltaNetFusion(ov::pass::paged_attention::Pa
 
     const auto matcher = std::make_shared<ov::pass::pattern::Matcher>(gdn, "PagedGatedDeltaNetFusion");
     register_matcher(matcher, callback);
+
+    if (!enable_modeling_provider_ops) {
+        return;
+    }
 
     auto linear_attention = wrap_type<ov::op::LinearAttention>();
 
@@ -228,29 +264,18 @@ PagedGatedDeltaNetFusion::PagedGatedDeltaNetFusion(ov::pass::paged_attention::Pa
                                                                                      1e-6F);
         paged_gdn->set_friendly_name(linear_attention_node->get_friendly_name() + "/PagedGatedDeltaNet");
 
-        const auto query_shape = std::make_shared<ov::op::v3::ShapeOf>(query, ov::element::i64);
-        const auto value_shape = std::make_shared<ov::op::v3::ShapeOf>(value, ov::element::i64);
-        const auto axis_0 = v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
-        const auto idx_q = v0::Constant::create(ov::element::i64, ov::Shape{2}, {0, 1});
-        const auto idx_v = v0::Constant::create(ov::element::i64, ov::Shape{2}, {2, 3});
-        const auto q_dims = std::make_shared<ov::op::v8::Gather>(query_shape, idx_q, axis_0);
-        const auto v_dims = std::make_shared<ov::op::v8::Gather>(value_shape, idx_v, axis_0);
-        const auto out0_shape = std::make_shared<v0::Concat>(ov::OutputVector{q_dims, v_dims}, 0);
-        const auto paged_gdn_out = std::make_shared<ov::op::v1::Reshape>(paged_gdn, out0_shape, false);
+        const auto restore_shape = make_output_restore_shape(query, value, OutputRestoreShapePolicy::ValueHeads);
+        const auto paged_gdn_out = std::make_shared<ov::op::v1::Reshape>(paged_gdn, restore_shape.output_shape, false);
         paged_gdn_out->set_friendly_name(linear_attention_node->get_friendly_name());
 
         for (const auto& state_consumer : state_consumers) {
             state_consumer.replace_source_output(linear_attention_node->input_value(5));
         }
 
-        ov::copy_runtime_info(linear_attention_node,
-                              {paged_gdn,
-                               query_shape,
-                               value_shape,
-                               q_dims,
-                               v_dims,
-                               out0_shape,
-                               paged_gdn_out});
+        auto rt_nodes = restore_shape.nodes();
+        rt_nodes.push_back(paged_gdn);
+        rt_nodes.push_back(paged_gdn_out);
+        ov::copy_runtime_info(linear_attention_node, rt_nodes);
 
         if (!ov::replace_output_update_name(linear_attention_node->output(0), paged_gdn_out->output(0))) {
             linear_attention_node->output(0).replace(paged_gdn_out->output(0));

@@ -4,6 +4,7 @@
 
 #include "openvino/pass/sdpa_to_paged_attention.hpp"
 
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -121,6 +122,10 @@ bool output_has_live_consumers(const ov::Output<ov::Node>& output,
     return false;
 }
 
+bool is_modeling_provider_model(const std::shared_ptr<ov::Model>& model) {
+    return model->has_rt_info(std::vector<std::string>{"modeling", "provider"});
+}
+
 bool bypass_attention_mask_hidden_multiply(const std::shared_ptr<ov::Model>& model,
                                            const std::shared_ptr<v0::Parameter>& attention_mask) {
     bool changed = false;
@@ -188,6 +193,8 @@ bool ov::pass::SDPAToPagedAttention::run_on_model(const std::shared_ptr<ov::Mode
     OPENVINO_ASSERT(ov::op::util::has_op_with_type<ov::op::v13::ScaledDotProductAttention>(model),
                     "No ScaledDotProductAttention operation observed in the graph, cannot perform "
                     "the SDPAToPagedAttention transformation.");
+
+    const bool use_modeling_provider_path = is_modeling_provider_model(model);
 
     m_params = PaParams{model->get_parameters()};
     m_results = PaResults{model->get_results()};
@@ -257,8 +264,8 @@ bool ov::pass::SDPAToPagedAttention::run_on_model(const std::shared_ptr<ov::Mode
                                                              // nodes are in the expected form before running
                                                              // PagedGatedDeltaNetFusion.
     manager.register_pass<StateManagementPattern>(m_params, m_results, m_options, var_ids_to_remove);
-    manager.register_pass<PagedCausalConv1DFusion>(m_params, var_ids_to_remove);
-    manager.register_pass<PagedGatedDeltaNetFusion>(m_params, var_ids_to_remove);
+    manager.register_pass<PagedCausalConv1DFusion>(m_params, var_ids_to_remove, use_modeling_provider_path);
+    manager.register_pass<PagedGatedDeltaNetFusion>(m_params, var_ids_to_remove, use_modeling_provider_path);
     manager.register_pass<PrevSequenceLengthPattern>(processed_input_ids, max_context_len, position_ids);
     manager.register_pass<TotalSequenceLengthPattern>(max_context_len);
     manager.register_pass<TotalSequenceLengthPatternQwen>(max_context_len);
@@ -269,8 +276,10 @@ bool ov::pass::SDPAToPagedAttention::run_on_model(const std::shared_ptr<ov::Mode
     manager.register_pass<PositionIDsReplacerLFM2>(position_ids);
     manager.run_passes(model);
 
-    if (auto attention_mask = get_parameter(model, "attention_mask")) {
-        bypass_attention_mask_hidden_multiply(model, attention_mask);
+    if (use_modeling_provider_path) {
+        if (auto attention_mask = get_parameter(model, "attention_mask")) {
+            bypass_attention_mask_hidden_multiply(model, attention_mask);
+        }
     }
 
     {
@@ -288,10 +297,18 @@ bool ov::pass::SDPAToPagedAttention::run_on_model(const std::shared_ptr<ov::Mode
         }
     }
 
-    const auto terminal_nodes = get_terminal_nodes(model, m_results.items());
-    for (auto& param_name : {"beam_idx", "attention_mask"}) {
-        if (auto param = get_parameter(model, param_name)) {
-            if (!output_has_live_consumers(param->output(0), terminal_nodes)) {
+    if (use_modeling_provider_path) {
+        const auto terminal_nodes = get_terminal_nodes(model, m_results.items());
+        for (auto& param_name : {"beam_idx", "attention_mask"}) {
+            if (auto param = get_parameter(model, param_name)) {
+                if (!output_has_live_consumers(param->output(0), terminal_nodes)) {
+                    model->remove_parameter(param);
+                }
+            }
+        }
+    } else {
+        for (auto& param_name : {"beam_idx", "attention_mask"}) {
+            if (auto param = get_parameter(model, param_name)) {
                 model->remove_parameter(param);
             }
         }

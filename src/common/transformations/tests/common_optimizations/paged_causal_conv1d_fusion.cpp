@@ -458,13 +458,16 @@ std::shared_ptr<ov::Model> build_fused_conv_model() {
 
 class PagedCausalConv1DFusionTest : public ::TransformationTestsF {};
 
-void run_paged_causal_conv1d_fusion(const std::shared_ptr<ov::Model>& model) {
+void run_paged_causal_conv1d_fusion(const std::shared_ptr<ov::Model>& model,
+                                    bool enable_modeling_provider_ops = false) {
     ov::pass::paged_attention::PaParams pa_params{model->get_parameters()};
     std::unordered_set<std::string> var_ids_to_remove;
 
     ov::pass::Manager manager;
     manager.set_per_pass_validation(false);
-    manager.register_pass<ov::pass::PagedCausalConv1DFusion>(pa_params, var_ids_to_remove);
+    manager.register_pass<ov::pass::PagedCausalConv1DFusion>(pa_params,
+                                                             var_ids_to_remove,
+                                                             enable_modeling_provider_ops);
     manager.run_passes(model);
     model->add_parameters(pa_params.items());
     model->validate_nodes_and_infer_types();
@@ -616,10 +619,30 @@ TEST_F(PagedCausalConv1DFusionTest, FusesNoBiasUsesEmptyBiasConstant) {
     model_ref = build_fused_reference_model(false);
 }
 
-TEST_F(PagedCausalConv1DFusionTest, LowersFusedConvToPagedConvAndSwish) {
+TEST_F(PagedCausalConv1DFusionTest, DoesNotLowerFusedConvWhenModelingProviderOpsDisabled) {
     model = build_fused_conv_model();
 
     run_paged_causal_conv1d_fusion(model);
+
+    size_t paged_conv_count = 0;
+    size_t fused_conv_count = 0;
+    for (const auto& op : model->get_ordered_ops()) {
+        if (std::string(op->get_type_name()) == "PagedCausalConv1D") {
+            ++paged_conv_count;
+        }
+        if (ov::is_type<ov::op::FusedConv>(op)) {
+            ++fused_conv_count;
+        }
+    }
+
+    EXPECT_EQ(paged_conv_count, 0u);
+    EXPECT_EQ(fused_conv_count, 1u);
+}
+
+TEST_F(PagedCausalConv1DFusionTest, LowersFusedConvToPagedConvAndSwish) {
+    model = build_fused_conv_model();
+
+    run_paged_causal_conv1d_fusion(model, true);
 
     size_t paged_conv_count = 0;
     size_t swish_count = 0;

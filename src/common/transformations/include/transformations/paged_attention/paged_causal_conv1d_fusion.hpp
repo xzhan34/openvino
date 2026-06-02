@@ -80,7 +80,8 @@ class TRANSFORMATIONS_API PagedCausalConv1DFusion : public ov::pass::MatcherPass
 public:
     OPENVINO_MATCHER_PASS_RTTI("PagedCausalConv1DFusion");
     PagedCausalConv1DFusion(ov::pass::paged_attention::PaParams& pa_params,
-                            std::unordered_set<std::string>& var_ids_to_remove);
+                            std::unordered_set<std::string>& var_ids_to_remove,
+                            bool enable_modeling_provider_ops = false);
 
 private:
     size_t m_layer_index = 0;

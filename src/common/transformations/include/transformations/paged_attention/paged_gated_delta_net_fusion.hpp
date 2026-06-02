@@ -57,7 +57,8 @@ class TRANSFORMATIONS_API PagedGatedDeltaNetFusion : public ov::pass::MatcherPas
 public:
     OPENVINO_MATCHER_PASS_RTTI("PagedGatedDeltaNetFusion");
     PagedGatedDeltaNetFusion(ov::pass::paged_attention::PaParams& pa_params,
-                             std::unordered_set<std::string>& var_ids_to_remove);
+                             std::unordered_set<std::string>& var_ids_to_remove,
+                             bool enable_modeling_provider_ops = false);
 
 private:
     size_t m_layer_index = 0;

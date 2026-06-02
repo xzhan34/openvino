@@ -103,7 +103,8 @@ ov::Output<ov::Node> convert_to_if_needed(const ov::Output<ov::Node>& input, con
 namespace ov::pass {
 
 PagedCausalConv1DFusion::PagedCausalConv1DFusion(ov::pass::paged_attention::PaParams& pa_params,
-                                                 std::unordered_set<std::string>& var_ids_to_remove) {
+                                                 std::unordered_set<std::string>& var_ids_to_remove,
+                                                 bool enable_modeling_provider_ops) {
     MATCHER_SCOPE(PagedCausalConv1DFusion);
 
     auto p_read_value = wrap_type<ov::op::util::ReadValueBase>(has_static_rank() && rank_equals(3));
@@ -241,6 +242,10 @@ PagedCausalConv1DFusion::PagedCausalConv1DFusion(ov::pass::paged_attention::PaPa
 
     const auto matcher = std::make_shared<ov::pass::pattern::Matcher>(p_slice_out, matcher_name);
     register_matcher(matcher, callback);
+
+    if (!enable_modeling_provider_ops) {
+        return;
+    }
 
     auto p_fused_conv = wrap_type<ov::op::FusedConv>();
 
