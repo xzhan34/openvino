@@ -134,7 +134,7 @@ jobs:
         timeout-minutes: 15
         with:
           path: ${{ env.OPENVINO_REPO }}
-          submodules: 'true'
+          submodules: 'recursive'  # Clone all public submodules normally
 
       - name: Clone OpenVINO
         if: ${{ inputs.os != 'fedora_29' }}
@@ -142,7 +142,36 @@ jobs:
         timeout-minutes: 15
         with:
           path: ${{ env.OPENVINO_REPO }}
-          submodules: 'true'
+          submodules: 'recursive'  # Clone all public submodules normally
+
+      # Override oneDNN with private fork from cache (if available)
+      - name: Restore oneDNN (CPU) submodule from cache
+        id: restore-onednn
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.OPENVINO_REPO }}/src/plugins/intel_cpu/thirdparty/onednn
+          key: submod-onednn-cpu-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            submod-onednn-cpu-v1-
+          fail-on-cache-miss: false  # Graceful fallback to public upstream
+
+      # Report oneDNN source for debugging
+      - name: Verify oneDNN submodule
+        working-directory: ${{ env.OPENVINO_REPO }}
+        run: |
+          cd src/plugins/intel_cpu/thirdparty/onednn
+          ONEDNN_SHA=$(git rev-parse HEAD)
+          ONEDNN_REMOTE=$(git remote get-url origin || echo "unknown")
+          echo "──────────────────────────────────────────────"
+          echo "oneDNN (CPU) Status:"
+          echo "  SHA:    ${ONEDNN_SHA}"
+          echo "  Remote: ${ONEDNN_REMOTE}"
+          if [[ "${ONEDNN_REMOTE}" == *"onednn.mx"* ]]; then
+            echo "  ✓ Using private onednn.mx fork (from cache)"
+          else
+            echo "  ⚠ Using public upstream (cache miss or fallback)"
+          fi
+          echo "──────────────────────────────────────────────"
 
       # Ticket: 139627
       - name: Checkout the latest OneDNN for GPU in nightly

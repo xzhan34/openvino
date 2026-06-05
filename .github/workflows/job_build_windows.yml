@@ -67,7 +67,39 @@ jobs:
         timeout-minutes: 15
         with:
           path: 'openvino'
-          submodules: 'true'
+          submodules: 'recursive'  # Clone all public submodules normally
+
+      # Override oneDNN with private fork from cache (if available)
+      - name: Restore oneDNN (CPU) submodule from cache
+        id: restore-onednn
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.OPENVINO_REPO }}\src\plugins\intel_cpu\thirdparty\onednn
+          key: submod-onednn-cpu-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            submod-onednn-cpu-v1-
+          fail-on-cache-miss: false  # Graceful fallback to public upstream
+
+      # Report oneDNN source for debugging
+      - name: Verify oneDNN submodule
+        working-directory: ${{ env.OPENVINO_REPO }}
+        shell: pwsh
+        run: |
+          Push-Location src\plugins\intel_cpu\thirdparty\onednn
+          $OneDnnSha = git rev-parse HEAD
+          $OneDnnRemote = git remote get-url origin 2>$null
+          if (-not $OneDnnRemote) { $OneDnnRemote = "unknown" }
+          Write-Host "──────────────────────────────────────────────"
+          Write-Host "oneDNN (CPU) Status:"
+          Write-Host "  SHA:    $OneDnnSha"
+          Write-Host "  Remote: $OneDnnRemote"
+          if ($OneDnnRemote -like "*onednn.mx*") {
+            Write-Host "  ✓ Using private onednn.mx fork (from cache)"
+          } else {
+            Write-Host "  ⚠ Using public upstream (cache miss or fallback)"
+          }
+          Write-Host "──────────────────────────────────────────────"
+          Pop-Location
 
       - name: Clone OpenVINO Contrib
         uses: ababushk/checkout@dd591a6a2ac25618db4eda86e7e0d938f88cf01b # cherry_pick_retries

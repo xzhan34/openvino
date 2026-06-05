@@ -1,0 +1,146 @@
+# Copyright (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Trusted submodule checkout workflow for openvino.mx.
+# Runs on pull_request_target to access SUBMODULE_PAT.
+# Clones private submodules (onednn.mx) and saves them to cache
+# for use by the untrusted PR workflow.
+#
+# SECURITY: never checks out PR code and never executes any PR scripts.
+
+name: Trusted Submodule Checkout
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to checkout submodules for"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
+jobs:
+  checkout-submodules:
+    name: Checkout — ${{ matrix.submodule }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # onednn.mx: private fork of oneDNN (CPU plugin)
+          - submodule: src/plugins/intel_cpu/thirdparty/onednn
+            cache_prefix: submod-onednn-cpu-v1
+            lfs: false
+            os: ubuntu-22.04
+            mx_url: https://github.com/openvinotoolkit/onednn.mx.git
+          # onednn_gpu: may need mx fork in future (GPU plugin)
+          - submodule: src/plugins/intel_gpu/thirdparty/onednn_gpu
+            cache_prefix: submod-onednn-gpu-v1
+            lfs: false
+            os: ubuntu-22.04
+            mx_url: ""  # empty = use .gitmodules URL as-is
+
+    steps:
+      # ── Step 1: Checkout base branch only (never PR head) ────────────────
+      - name: Checkout base repo (base branch only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Step 2: Detect whether PR comes from a fork ──────────────────────
+      - name: Detect fork PR
+        id: fork-check
+        shell: bash
+        run: |
+          HEAD_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+          BASE_REPO="${{ github.repository }}"
+          if [[ -n "$HEAD_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+            echo "is_fork=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_fork=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Step 3: Resolve submodule gitlink SHA + URL ───────────────────────
+      - name: Resolve submodule gitlink
+        id: resolve
+        shell: bash
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number || inputs.pr_number }}"
+          IS_FORK="${{ steps.fork-check.outputs.is_fork }}"
+          MX_URL="${{ matrix.mx_url }}"
+          bash scripts/ci/resolve_submodule_gitlink.sh "${{ matrix.submodule }}" "$PR_NUMBER" "$IS_FORK" "$MX_URL"
+
+      # ── Step 4: Compute cache key ─────────────────────────────────────────
+      - name: Compute cache key
+        id: cache-key
+        shell: bash
+        run: |
+          KEY="${{ matrix.cache_prefix }}-${{ steps.resolve.outputs.sha }}"
+          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
+          echo "Cache key: ${KEY}"
+
+      # ── Step 5: Check if cache already exists ────────────────────────────
+      - name: Restore cache (exact key)
+        id: cache-check
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ matrix.submodule }}
+          key: ${{ steps.cache-key.outputs.key }}
+          enableCrossOsArchive: true
+
+      # ── Step 6: Clone submodule via PAT (cache miss only) ─────────────────
+      - name: Install git-lfs
+        if: steps.cache-check.outputs.cache-hit != 'true' && matrix.lfs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+
+      - name: Clone submodule via PAT
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+        run: |
+          SHA="${{ steps.resolve.outputs.sha }}"
+          URL="${{ steps.resolve.outputs.url }}"
+          DEST="${{ matrix.submodule }}"
+
+          # Inject PAT into URL
+          AUTHED_URL="${URL/https:\/\//https://oauth2:${SUBMODULE_PAT}@}"
+
+          if [[ "${{ matrix.lfs }}" == "true" ]]; then
+            git lfs install
+          fi
+
+          echo "Cloning ${URL} (authenticated) to ${DEST}"
+          git clone "$AUTHED_URL" "$DEST"
+          cd "$DEST"
+
+          echo "Checking out SHA ${SHA}"
+          git checkout "$SHA"
+
+          if [[ "${{ matrix.lfs }}" == "true" ]]; then
+            git lfs pull
+          fi
+
+          # Recursively clone public sub-submodules
+          if [[ -f .gitmodules ]]; then
+            echo "Initializing sub-submodules recursively"
+            git submodule update --init --recursive
+          fi
+
+      # ── Step 7: Save cache ────────────────────────────────────────────────
+      - name: Save cache
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ matrix.submodule }}
+          key: ${{ steps.cache-key.outputs.key }}
+          enableCrossOsArchive: true
