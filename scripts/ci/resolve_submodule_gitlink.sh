@@ -32,7 +32,17 @@ MX_URL="${4:-}"
 
 _get_base_values() {
     SHA=$(git rev-parse "HEAD:${SUBMODULE_PATH}" 2>/dev/null || echo "unknown")
-    URL=$(git config -f .gitmodules --get "submodule.${SUBMODULE_PATH}.url")
+    # Try to get URL using the path as key first
+    URL=$(git config -f .gitmodules --get "submodule.${SUBMODULE_PATH}.url" 2>/dev/null || true)
+    # If not found, search for the submodule by matching the path value
+    if [[ -z "$URL" ]]; then
+        # Find the submodule name that has this path
+        local submodule_name=$(git config -f .gitmodules --get-regexp "submodule\..*\.path" | \
+            awk -v path="${SUBMODULE_PATH}" '$2 == path {sub(/submodule\./, "", $1); sub(/\.path$/, "", $1); print $1; exit}')
+        if [[ -n "$submodule_name" ]]; then
+            URL=$(git config -f .gitmodules --get "submodule.${submodule_name}.url")
+        fi
+    fi
 }
 
 _get_pr_values() {
@@ -50,7 +60,17 @@ _get_pr_values() {
     local tmpfile
     tmpfile=$(mktemp)
     MSYS_NO_PATHCONV=1 git show "${local_ref}:.gitmodules" > "$tmpfile"
-    URL=$(git config -f "$tmpfile" --get "submodule.${SUBMODULE_PATH}.url")
+    # Try to get URL using the path as key first
+    URL=$(git config -f "$tmpfile" --get "submodule.${SUBMODULE_PATH}.url" 2>/dev/null || true)
+    # If not found, search for the submodule by matching the path value
+    if [[ -z "$URL" ]]; then
+        # Find the submodule name that has this path
+        local submodule_name=$(git config -f "$tmpfile" --get-regexp "submodule\..*\.path" | \
+            awk -v path="${SUBMODULE_PATH}" '$2 == path {sub(/submodule\./, "", $1); sub(/\.path$/, "", $1); print $1; exit}')
+        if [[ -n "$submodule_name" ]]; then
+            URL=$(git config -f "$tmpfile" --get "submodule.${submodule_name}.url")
+        fi
+    fi
     rm -f "$tmpfile"
 }
 

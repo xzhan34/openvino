@@ -33,18 +33,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # onednn.mx: private fork of oneDNN (CPU plugin)
-          - submodule: src/plugins/intel_cpu/thirdparty/onednn
-            cache_prefix: submod-onednn-cpu-v1
-            lfs: false
-            os: ubuntu-22.04
-            mx_url: https://github.com/openvinotoolkit/onednn.mx.git
-          # onednn_gpu: may need mx fork in future (GPU plugin)
+          # onednn_gpu: private fork onednn.mx (GPU plugin)
           - submodule: src/plugins/intel_gpu/thirdparty/onednn_gpu
             cache_prefix: submod-onednn-gpu-v1
             lfs: false
             os: ubuntu-22.04
-            mx_url: ""  # empty = use .gitmodules URL as-is
+            mx_url: https://github.com/openvinotoolkit/onednn.mx.git
 
     steps:
       # ── Step 1: Checkout base branch only (never PR head) ────────────────
