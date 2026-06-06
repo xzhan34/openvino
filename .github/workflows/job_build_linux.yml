@@ -134,7 +134,7 @@ jobs:
         timeout-minutes: 15
         with:
           path: ${{ env.OPENVINO_REPO }}
-          submodules: 'recursive'  # Clone all public submodules normally
+          submodules: 'false'
 
       - name: Clone OpenVINO
         if: ${{ inputs.os != 'fedora_29' }}
@@ -142,7 +142,18 @@ jobs:
         timeout-minutes: 15
         with:
           path: ${{ env.OPENVINO_REPO }}
-          submodules: 'recursive'  # Clone all public submodules normally
+          submodules: 'false'
+
+      # Initialize all submodules except GPU oneDNN (which is private)
+      - name: Initialize public submodules
+        working-directory: ${{ env.OPENVINO_REPO }}
+        run: |
+          # Deinit GPU oneDNN to prevent cloning private repo
+          git submodule deinit -f src/plugins/intel_gpu/thirdparty/onednn_gpu || true
+          # Initialize all other submodules
+          git submodule update --init --recursive
+          # GPU oneDNN will be restored from cache in the next step
+          echo "✓ Public submodules initialized (GPU oneDNN skipped)"
 
       # Override oneDNN GPU with private fork from cache (if available)
       - name: Restore oneDNN (GPU) submodule from cache
