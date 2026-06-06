@@ -130,19 +130,19 @@ jobs:
           GIT_TRACE: 1
           GIT_TRACE_PERFORMANCE: 1
           GIT_CURL_VERBOSE: 1
-        uses: ababushk/checkout@dd591a6a2ac25618db4eda86e7e0d938f88cf01b # cherry_pick_retries
+        uses: actions/checkout@v4
         timeout-minutes: 15
         with:
           path: ${{ env.OPENVINO_REPO }}
-          submodules: 'false'
+          submodules: false
 
       - name: Clone OpenVINO
         if: ${{ inputs.os != 'fedora_29' }}
-        uses: ababushk/checkout@dd591a6a2ac25618db4eda86e7e0d938f88cf01b # cherry_pick_retries
+        uses: actions/checkout@v4
         timeout-minutes: 15
         with:
           path: ${{ env.OPENVINO_REPO }}
-          submodules: 'false'
+          submodules: false
 
       # Initialize all submodules except GPU oneDNN (which is private)
       - name: Initialize public submodules
