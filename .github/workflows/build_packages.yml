@@ -60,7 +60,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      # Initialize all submodules except GPU oneDNN (which is private)
+      - name: Initialize public submodules
+        shell: bash
+        run: |
+          # Deinit GPU oneDNN to prevent cloning private repo
+          git submodule deinit -f src/plugins/intel_gpu/thirdparty/onednn_gpu || true
+          # Initialize all other submodules
+          git submodule update --init --recursive
+          # GPU oneDNN will be restored from cache in the next step
+          echo "✓ Public submodules initialized (GPU oneDNN skipped)"
+
+      # Restore GPU oneDNN from cache (created by trusted-submodule-checkout workflow)
+      - name: Restore oneDNN (GPU) submodule from cache
+        id: restore-onednn-gpu
+        uses: actions/cache/restore@v4
+        with:
+          path: src/plugins/intel_gpu/thirdparty/onednn_gpu
+          key: submod-onednn-gpu-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            submod-onednn-gpu-v1-
+          fail-on-cache-miss: false
+
+      # Report oneDNN GPU source for debugging
+      - name: Verify oneDNN GPU submodule
+        shell: bash
+        run: |
+          cd src/plugins/intel_gpu/thirdparty/onednn_gpu
+          ONEDNN_SHA=$(git rev-parse HEAD 2>/dev/null || echo "not initialized")
+          ONEDNN_REMOTE=$(git remote get-url origin 2>/dev/null || echo "unknown")
+          echo "──────────────────────────────────────────────"
+          echo "oneDNN (GPU) Status:"
+          echo "  SHA:    ${ONEDNN_SHA}"
+          echo "  Remote: ${ONEDNN_REMOTE}"
+          if [[ "${ONEDNN_REMOTE}" == *"onednn.mx"* ]]; then
+            echo "  ✓ Using private onednn.mx fork (from cache)"
+          else
+            echo "  ⚠ Using public upstream (cache miss or not initialized)"
+          fi
+          echo "──────────────────────────────────────────────"
 
       # ── Linux system dependencies ────────────────────────────────────────
       - name: Install system dependencies (Ubuntu)
