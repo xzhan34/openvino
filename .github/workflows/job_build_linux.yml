@@ -148,8 +148,8 @@ jobs:
       - name: Initialize public submodules
         working-directory: ${{ env.OPENVINO_REPO }}
         run: |
-          # Deinit GPU oneDNN to prevent cloning private repo
-          git submodule deinit -f src/plugins/intel_gpu/thirdparty/onednn_gpu || true
+          # Temporarily remove GPU oneDNN URL from .gitmodules to prevent git from trying to clone it
+          git config -f .gitmodules --unset submodule.thirdparty/onednn_gpu.url || true
           # Initialize all other submodules
           git submodule update --init --recursive
           # GPU oneDNN will be restored from cache in the next step
