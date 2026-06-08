@@ -66,11 +66,15 @@ jobs:
       - name: Initialize public submodules
         shell: bash
         run: |
-          # Temporarily remove GPU oneDNN URL from .gitmodules to prevent git from trying to clone it
-          git config -f .gitmodules --unset submodule.thirdparty/onednn_gpu.url || true
-          # Initialize all other submodules
-          git submodule update --init --recursive
-          # GPU oneDNN will be restored from cache in the next step
+          # Get list of all submodule paths except GPU oneDNN
+          SUBMODULES=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | \
+            grep -v 'onednn_gpu' | awk '{print $2}' | tr '\n' ' ')
+
+          # Initialize only public submodules
+          if [ -n "$SUBMODULES" ]; then
+            git submodule update --init --recursive $SUBMODULES
+          fi
+
           echo "✓ Public submodules initialized (GPU oneDNN skipped)"
 
       # Restore GPU oneDNN from cache (created by trusted-submodule-checkout workflow)
