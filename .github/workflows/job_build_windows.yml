@@ -97,24 +97,43 @@ jobs:
           restore-keys: |
             submod-onednn-gpu-v1-
           fail-on-cache-miss: false  # Graceful fallback to public upstream
+          enableCrossOsArchive: true
 
       # Report oneDNN GPU source for debugging
       - name: Verify oneDNN GPU submodule
         working-directory: ${{ env.OPENVINO_REPO }}
         shell: pwsh
         run: |
-          Push-Location src\plugins\intel_gpu\thirdparty\onednn_gpu
-          $OneDnnSha = git rev-parse HEAD
-          $OneDnnRemote = git remote get-url origin 2>$null
-          if (-not $OneDnnRemote) { $OneDnnRemote = "unknown" }
+          $onednnPath = "src\plugins\intel_gpu\thirdparty\onednn_gpu"
           Write-Host "──────────────────────────────────────────────"
           Write-Host "oneDNN (GPU) Status:"
+
+          if (-not (Test-Path "$onednnPath\.git")) {
+            Write-Host "  ✗ ERROR: oneDNN GPU submodule not initialized"
+            Write-Host "  Path: $onednnPath"
+            Write-Host "  Cache restore status: ${{ steps.restore-onednn-gpu.outputs.cache-hit }}"
+            Write-Host "──────────────────────────────────────────────"
+            Write-Host ""
+            Write-Host "FATAL: GPU oneDNN submodule is required but not available."
+            Write-Host "This means the trusted-submodule-checkout workflow did not run or failed."
+            Write-Host "Please check: https://github.com/${{ github.repository }}/actions/workflows/trusted-submodule-checkout.yml"
+            exit 1
+          }
+
+          Push-Location $onednnPath
+          $OneDnnSha = git rev-parse HEAD 2>$null
+          if (-not $OneDnnSha) { $OneDnnSha = "unknown" }
+          $OneDnnRemote = git remote get-url origin 2>$null
+          if (-not $OneDnnRemote) { $OneDnnRemote = "unknown" }
+
           Write-Host "  SHA:    $OneDnnSha"
           Write-Host "  Remote: $OneDnnRemote"
+          Write-Host "  Cache:  ${{ steps.restore-onednn-gpu.outputs.cache-hit }}"
+
           if ($OneDnnRemote -like "*onednn.mx*") {
             Write-Host "  ✓ Using private onednn.mx fork (from cache)"
           } else {
-            Write-Host "  ⚠ Using public upstream (cache miss or fallback)"
+            Write-Host "  ⚠ Using public upstream (cache miss or not initialized)"
           }
           Write-Host "──────────────────────────────────────────────"
           Pop-Location
